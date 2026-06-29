@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Intelligent Highway Enforcement Portal - Section 35</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          backgroundImage: {
+            'radial-vignette': 'radial-gradient(circle, transparent 50%, rgba(2, 6, 23, 0.55) 100%)',
+          }
+        }
+      }
+    }
+  </script>
+  <!-- React & ReactDOM CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <!-- Babel CDN for JSX Compilation -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-950">
+  <div id="root"></div>
+
+  <!-- React Script using Babel -->
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // Mock Data Dictionary
+    const MODEL_DATA = {
+      model_1: {
+        name: "Model 1 (Baseline YOLOv8)",
+        fps: 18,
+        precision: "72.4%",
+        falsePositives: "High (Confuses cars with trucks)",
+        description: "Initial prototype trained on generic COCO datasets. Fails under low-resolution conditions and perspective distortion on elevated expressways.",
+        latency: "55 ms",
+        gpuMemory: "1.8 GB",
+        confidenceThreshold: "0.50",
+        backbone: "Darknet-53 / COCO Pre-trained"
+      },
+      model_2: {
+        name: "Model 2 (Optimized Truck Detector v2)",
+        fps: 32,
+        precision: "94.8%",
+        falsePositives: "Very Low (Hyper-focused profiling)",
+        description: "Custom-trained on local Thai highway imagery. Implements high-visibility bounding boxes and handles Section 35 spatial-temporal logic flawlessly.",
+        latency: "31 ms",
+        gpuMemory: "1.1 GB",
+        confidenceThreshold: "0.65",
+        backbone: "Custom YOLOv8s + TensorRT Optimization"
+      }
+    };
+
+    // Mock Simulated Traffic Feed Events for the overlay
+    const SIMULATION_EVENTS = [
+      {
+        time: 0,
+        vehicle: "Toyota Hilux",
+        type: "Pickup",
+        lane: 2,
+        speed: 92,
+        license: "3กข-1234 กรุงเทพฯ",
+        confidence: "91%",
+        isViolation: false,
+        box: { x: "25%", y: "45%", w: "12%", h: "15%" },
+        statusText: "PASS (Permitted Lane)"
+      },
+      {
+        time: 3,
+        vehicle: "Isuzu Deca (10-Wheel Truck)",
+        type: "Heavy Truck",
+        lane: 4, // Right-most lane (violation)
+        speed: 88,
+        license: "70-5678 ชลบุรี",
+        confidence: "97%",
+        isViolation: true,
+        box: { x: "72%", y: "55%", w: "22%", h: "32%" },
+        statusText: "VIOLATION: SEC 35"
+      },
+      {
+        time: 6,
+        vehicle: "Honda Civic",
+        type: "Sedan",
+        lane: 4, // Fast lane, permitted for cars
+        speed: 115,
+        license: "9กศ-9999 กรุงเทพฯ",
+        confidence: "94%",
+        isViolation: false,
+        box: { x: "65%", y: "40%", w: "10%", h: "12%" },
+        statusText: "PASS (Passenger Vehicle)"
+      },
+      {
+        time: 9,
+        vehicle: "Hino Vector (Container Truck)",
+        type: "Heavy Truck",
+        lane: 4, // Violation
+        speed: 82,
+        license: "82-4321 สมุทรปราการ",
+        confidence: "98%",
+        isViolation: true,
+        box: { x: "70%", y: "50%", w: "24%", h: "35%" },
+        statusText: "VIOLATION: SEC 35"
+      },
+      {
+        time: 12,
+        vehicle: "Scania G410",
+        type: "Heavy Truck",
+        lane: 3, // Permitted lane for trucks
+        speed: 80,
+        license: "71-8888 นครปฐม",
+        confidence: "95%",
+        isViolation: false,
+        box: { x: "46%", y: "48%", w: "18%", h: "25%" },
+        statusText: "PASS (Permitted Lane)"
+      }
+    ];
+
+    function TrafficDashboard() {
+      const [selectedModel, setSelectedModel] = useState("model_2");
+      const [videoFile, setVideoFile] = useState(null);
+      const [videoUrl, setVideoUrl] = useState(null);
+      
+      // Simulation and UI Control States
+      const [isSimulating, setIsSimulating] = useState(false);
+      const [currentEventIndex, setCurrentEventIndex] = useState(0);
+      const [violationsCount, setViolationsCount] = useState(6); // starts with mock stats
+      const [logFeed, setLogFeed] = useState([
+        { id: 1, time: "10:55:02", type: "system", msg: "Traffic enforcement engine initialized successfully." },
+        { id: 2, time: "10:55:04", type: "system", msg: "Thai Land Traffic Act Sec 35 rule definition loaded." },
+        { id: 3, time: "10:55:10", type: "info", msg: "Calibration successful: Lanes 1-4 mapped on KM 18.2 Highway." }
+      ]);
+      const [systemLogsFilter, setSystemLogsFilter] = useState("all"); // 'all', 'violations', 'system'
+
+      const videoRef = useRef(null);
+      const logEndRef = useRef(null);
+
+      const modelInfo = MODEL_DATA[selectedModel];
+
+      // Auto-scroll logs to bottom
+      useEffect(() => {
+        if (logEndRef.current) {
+          logEndRef.current.scrollIntoView({ behavior: "smooth" });
+        }
+      }, [logFeed]);
+
+      // Handle Video Upload
+      const handleVideoUpload = (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          // Clear previous blob url if exists
+          if (videoUrl) {
+            URL.revokeObjectURL(videoUrl);
+          }
+          setVideoFile(file);
+          const url = URL.createObjectURL(file);
+          setVideoUrl(url);
+          setIsSimulating(false); // Stop manual simulation to prioritize video
+          
+          // Append upload system log
+          addLogEntry("system", `User uploaded test video: ${file.name}`);
+        }
+      };
+
+      // Helper to add logs
+      const addLogEntry = (type, msg) => {
+        const timestamp = new Date().toLocaleTimeString();
+        setLogFeed((prev) => [
+          ...prev,
+          { id: Date.now() + Math.random(), time: timestamp, type, msg }
+        ]);
+      };
+
+      // Simulation tick loop (runs when simulating or when video is playing)
+      useEffect(() => {
+        let interval = null;
+        if (isSimulating) {
+          interval = setInterval(() => {
+            setCurrentEventIndex((prevIndex) => {
+              const nextIndex = (prevIndex + 1) % SIMULATION_EVENTS.length;
+              const event = SIMULATION_EVENTS[nextIndex];
+              
+              // Trigger system actions based on event type
+              if (event.isViolation) {
+                setViolationsCount(prev => prev + 1);
+                addLogEntry("violation", `⚠️ SEC 35 VIOLATION: ${event.vehicle} (${event.license}) in Lane ${event.lane} at ${event.speed} km/h (Conf: ${event.confidence})`);
+              } else {
+                addLogEntry("info", `Detection: ${event.vehicle} in Lane ${event.lane} - ${event.statusText}`);
+              }
+              
+              return nextIndex;
+            });
+          }, 3500);
+        }
+        return () => clearInterval(interval);
+      }, [isSimulating]);
+
+      // Listen to video element play state to toggle simulation indicators
+      const handleVideoPlay = () => {
+        setIsSimulating(true);
+        addLogEntry("system", "CCTV video feed started playback. Starting real-time inferencing...");
+      };
+
+      const handleVideoPause = () => {
+        setIsSimulating(false);
+        addLogEntry("system", "CCTV video feed paused. Inferencing suspended.");
+      };
+
+      const handleModelChange = (e) => {
+        const model = e.target.value;
+        setSelectedModel(model);
+        addLogEntry("system", `Switched to ${MODEL_DATA[model].name}. Inference engine re-allocated.`);
+      };
+
+      // Filtered log items
+      const filteredLogs = logFeed.filter(log => {
+        if (systemLogsFilter === "violations") return log.type === "violation";
+        if (systemLogsFilter === "system") return log.type === "system";
+        return true; // "all"
+      });
+
+      const activeOverlayEvent = isSimulating ? SIMULATION_EVENTS[currentEventIndex] : null;
+
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-100 font-sans antialiased p-4 lg:p-6 flex flex-col justify-between selection:bg-cyan-500 selection:text-slate-950">
+          
+          {/* BACKGROUND DECORATIONS */}
+          <div className="absolute top-0 left-1/4 w-96 h-96 bg-cyan-900/10 rounded-full blur-3xl pointer-events-none"></div>
+          <div className="absolute bottom-10 right-1/4 w-96 h-96 bg-emerald-950/20 rounded-full blur-3xl pointer-events-none"></div>
+
+          {/* HEADER SECTION */}
+          <header className="relative z-10 border-b border-slate-800 bg-slate-900/80 backdrop-blur-md rounded-xl p-4 mb-6 shadow-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="flex h-3 w-3 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                </span>
+                <span className="text-xs font-semibold uppercase tracking-wider text-emerald-400">Live Operation Feed</span>
+              </div>
+              <h1 className="text-xl md:text-2xl font-bold bg-gradient-to-r from-slate-50 via-cyan-100 to-cyan-400 bg-clip-text text-transparent mt-1">
+                Intelligent Highway Enforcement Portal
+              </h1>
+              <p className="text-xs md:text-sm text-slate-400 mt-0.5">
+                Thai Land Traffic Act — Section 35 Detection Subsystem (KM 18.2 Expressways)
+              </p>
+            </div>
+
+            {/* University Defense / Tech specs badges */}
+            <div className="flex flex-wrap gap-2 items-center text-xs">
+              <div className="bg-slate-800/80 border border-slate-700/60 px-3 py-1.5 rounded-lg flex items-center gap-2">
+                <span className="text-slate-400">Target Lane:</span>
+                <span className="text-red-400 font-semibold uppercase font-mono">Lane 4 (Fast)</span>
+              </div>
+              <div className="bg-slate-800/80 border border-slate-700/60 px-3 py-1.5 rounded-lg flex items-center gap-2">
+                <span className="text-slate-400">GPU Acceleration:</span>
+                <span className="text-cyan-400 font-semibold font-mono">CUDA 12.1</span>
+              </div>
+              <span className="text-slate-600">|</span>
+              <div className="bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 px-3 py-1.5 rounded-lg font-medium shadow-sm">
+                Senior Engineering Defense v1.0
+              </div>
+            </div>
+          </header>
+
+          {/* MAIN LAYOUT */}
+          <main className="relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-6 flex-grow">
+            
+            {/* LEFT COLUMN: CONTROL & METRICS (4 Cols) */}
+            <section className="lg:col-span-4 flex flex-col gap-6">
+              
+              {/* CONTROL PANEL CARD */}
+              <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 shadow-xl backdrop-blur-sm relative overflow-hidden group">
+                <div className="absolute top-0 left-0 w-1 h-full bg-cyan-500"></div>
+                
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-cyan-400 mb-4 flex items-center gap-2">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path>
+                  </svg>
+                  Control Center
+                </h2>
+
+                <div className="space-y-4">
+                  
+                  {/* Dropdown Selector */}
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wide">
+                      Select Inference Model
+                    </label>
+                    <div className="relative">
+                      <select
+                        value={selectedModel}
+                        onChange={handleModelChange}
+                        className="w-full bg-slate-950 border border-slate-700/80 rounded-lg py-2.5 px-3 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 transition-all appearance-none cursor-pointer"
+                      >
+                        <option value="model_1">Model 1 (Baseline YOLOv8)</option>
+                        <option value="model_2">Model 2 (Optimized Truck Detector v2)</option>
+                      </select>
+                      <div className="absolute inset-y-0 right-3 flex items-center pointer-events-none text-slate-400">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* File Upload Area */}
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wide">
+                      Upload Test Footage (.mp4)
+                    </label>
+                    <div className="relative border border-dashed border-slate-700/80 hover:border-cyan-500/80 rounded-lg p-4 transition-all bg-slate-950/60 hover:bg-slate-950 flex flex-col items-center justify-center text-center cursor-pointer group">
+                      <input
+                        type="file"
+                        accept="video/mp4"
+                        onChange={handleVideoUpload}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                      />
+                      <svg className="w-8 h-8 text-slate-400 group-hover:text-cyan-400 mb-2 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                      </svg>
+                      <span className="text-xs font-medium text-slate-300 group-hover:text-white transition-colors">
+                        {videoFile ? videoFile.name : "Select raw road video"}
+                      </span>
+                      <span className="text-[10px] text-slate-500 mt-1">MP4 format (Max 50MB recommended)</span>
+                    </div>
+                  </div>
+
+                  {/* Simulation Mode Toggle (Useful for presenting when video is absent) */}
+                  <div className="pt-2 border-t border-slate-800">
+                    <button
+                      onClick={() => {
+                        setIsSimulating(!isSimulating);
+                        addLogEntry("system", isSimulating ? "Mock Simulation stopped." : "Running Mock Inference pipeline simulator...");
+                      }}
+                      className={`w-full flex items-center justify-center gap-2 py-2 px-4 rounded-lg text-xs font-semibold tracking-wider uppercase transition-all duration-300 ${
+                        isSimulating
+                          ? "bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:bg-amber-500/30"
+                          : "bg-slate-800 text-slate-200 border border-slate-700 hover:bg-slate-700/80 hover:text-white"
+                      }`}
+                    >
+                      <span className={`w-2 h-2 rounded-full ${isSimulating ? "bg-amber-400 animate-pulse" : "bg-slate-500"}`}></span>
+                      {isSimulating ? "Stop Mock Simulation" : "Simulate Inference Stream"}
+                    </button>
+                  </div>
+
+                </div>
+              </div>
+
+              {/* METRICS DASHBOARD CARD */}
+              <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 shadow-xl backdrop-blur-sm relative overflow-hidden flex-grow flex flex-col justify-between">
+                <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500"></div>
+                
+                <div>
+                  <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-sm font-semibold uppercase tracking-wider text-emerald-400 flex items-center gap-2">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                      </svg>
+                      Model Benchmark Profile
+                    </h2>
+                    <span className="text-[10px] font-mono text-slate-500 uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                      Telemetry Active
+                    </span>
+                  </div>
+
+                  {/* Dynamic Metrics Cards */}
+                  <div className="grid grid-cols-2 gap-3 mb-4">
+                    
+                    {/* Metric: FPS */}
+                    <div className="bg-slate-950/80 p-3 rounded-lg border border-slate-800 flex flex-col justify-between hover:border-slate-700 transition-colors">
+                      <span className="text-[10px] font-medium uppercase tracking-wider text-slate-400">Processing Rate</span>
+                      <div className="flex items-baseline gap-1.5 mt-1.5">
+                        <span className="text-2xl font-bold font-mono text-emerald-400">{modelInfo.fps}</span>
+                        <span className="text-xs font-semibold text-slate-500">FPS</span>
+                      </div>
+                      <span className="text-[9px] text-slate-500 mt-1">Real-time Stream Rate</span>
+                    </div>
+
+                    {/* Metric: Precision */}
+                    <div className="bg-slate-950/80 p-3 rounded-lg border border-slate-800 flex flex-col justify-between hover:border-slate-700 transition-colors">
+                      <span className="text-[10px] font-medium uppercase tracking-wider text-slate-400">Mean Average Precision</span>
+                      <div className="flex items-baseline gap-1.5 mt-1.5">
+                        <span className="text-2xl font-bold font-mono text-cyan-400">{modelInfo.precision}</span>
+                        <span className="text-xs font-semibold text-slate-500">mAP</span>
+                      </div>
+                      <span className="text-[9px] text-slate-500 mt-1">IoU Threshold @0.5:0.95</span>
+                    </div>
+
+                    {/* Metric: False Positives */}
+                    <div className="col-span-2 bg-slate-950/80 p-3 rounded-lg border border-slate-800 hover:border-slate-700 transition-colors flex justify-between items-center">
+                      <div>
+                        <span className="text-[10px] font-medium uppercase tracking-wider text-slate-400 block">False Positive Rate</span>
+                        <span className={`text-xs font-semibold mt-1 inline-block px-2 py-0.5 rounded ${
+                          selectedModel === "model_1" ? "bg-red-950 text-red-400 border border-red-900/50" : "bg-emerald-950 text-emerald-400 border border-emerald-900/50"
+                        }`}>
+                          {modelInfo.falsePositives}
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[9px] text-slate-500 uppercase block font-mono">Inference Speed</span>
+                        <span className="text-xs font-bold text-slate-300 font-mono">{modelInfo.latency}</span>
+                      </div>
+                    </div>
+
+                  </div>
+
+                  {/* Dynamic Description Box */}
+                  <div className="bg-slate-950/50 rounded-lg p-3 border border-slate-800 text-xs leading-relaxed mb-4">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block mb-1">Architecture Description</span>
+                    <p className="text-slate-300 text-xs italic">
+                      "{modelInfo.description}"
+                    </p>
+                  </div>
+                </div>
+
+                {/* Model Extra Tech Details */}
+                <div className="pt-3 border-t border-slate-800 grid grid-cols-2 gap-x-2 gap-y-1.5 text-[11px] font-mono">
+                  <div className="flex justify-between py-0.5">
+                    <span className="text-slate-500">Backbone:</span>
+                    <span className="text-slate-300 font-medium truncate max-w-[120px]" title={modelInfo.backbone}>{modelInfo.backbone}</span>
+                  </div>
+                  <div className="flex justify-between py-0.5">
+                    <span className="text-slate-500">VRAM Alloc:</span>
+                    <span className="text-slate-300 font-medium">{modelInfo.gpuMemory}</span>
+                  </div>
+                  <div className="flex justify-between py-0.5">
+                    <span className="text-slate-500">Conf Threshold:</span>
+                    <span className="text-slate-300 font-medium">{modelInfo.confidenceThreshold}</span>
+                  </div>
+                  <div className="flex justify-between py-0.5">
+                    <span className="text-slate-500">Optimization:</span>
+                    <span className="text-cyan-400 font-semibold">{selectedModel === "model_2" ? "TensorRT (FP16)" : "PyTorch (FP32)"}</span>
+                  </div>
+                </div>
+
+              </div>
+            </section>
+
+            {/* RIGHT COLUMN: VIDEO FEEDS & SYSTEM CONSOLE (8 Cols) */}
+            <section className="lg:col-span-8 flex flex-col gap-6">
+              
+              {/* MAIN CCTV FEED STREAM VIEWER */}
+              <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl relative flex flex-col">
+                
+                {/* Feed Header */}
+                <div className="bg-slate-950/80 border-b border-slate-800 px-4 py-2.5 flex justify-between items-center">
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-2.5 w-2.5 relative">
+                      <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${isSimulating ? "bg-red-400" : "bg-amber-400"} opacity-75`}></span>
+                      <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${isSimulating ? "bg-red-500" : "bg-amber-500"}`}></span>
+                    </span>
+                    <span className="text-xs font-mono font-bold tracking-wider uppercase text-slate-300">
+                      {videoFile ? `Camera Stream: /src/video/${videoFile.name}` : "CAMERA STREAM: STANDBY"}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-slate-500 font-mono tracking-widest">
+                    FPS: <span className="text-cyan-400 font-bold">{isSimulating ? modelInfo.fps : 0}</span> | LATENCY: <span className="text-cyan-400 font-bold">{isSimulating ? modelInfo.latency : "N/A"}</span>
+                  </div>
+                </div>
+
+                {/* Video / Placeholder Container */}
+                <div className="relative aspect-video w-full bg-slate-950 flex items-center justify-center overflow-hidden">
+                  
+                  {/* CCTV GRID LAYER OVERLAY */}
+                  <div className="absolute inset-0 bg-[linear-gradient(rgba(18,24,38,0.1)_1px,transparent_1px),linear-gradient(90deg,rgba(18,24,38,0.1)_1px,transparent_1px)] bg-[size:32px_32px] pointer-events-none z-10"></div>
+                  
+                  {/* VIGNETTE & CRTC EFFECT */}
+                  <div className="absolute inset-0 bg-radial-vignette pointer-events-none z-10"></div>
+
+                  {videoUrl ? (
+                    // Actual Video Playback Element
+                    <video
+                      ref={videoRef}
+                      controls
+                      src={videoUrl}
+                      onPlay={handleVideoPlay}
+                      onPause={handleVideoPause}
+                      className="w-full h-full object-cover relative z-0"
+                    />
+                  ) : (
+                    // Beautiful placeholder box
+                    <div className="flex flex-col items-center justify-center p-8 text-center max-w-md relative z-20">
+                      <div className="w-16 h-16 rounded-full bg-slate-900 border border-slate-800/80 hover:border-cyan-500/50 flex items-center justify-center text-cyan-400 mb-4 shadow-inner animate-pulse transition-all">
+                        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                        </svg>
+                      </div>
+                      <h3 className="text-sm font-semibold tracking-wide text-slate-200">Awaiting Video Stream Initialization...</h3>
+                      <p className="text-xs text-slate-500 mt-2">
+                        Please upload a test highway video above, or click <strong className="text-cyan-400 cursor-pointer hover:underline" onClick={() => setIsSimulating(!isSimulating)}>"Simulate Inference Stream"</strong> to preview system visual logic.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* SIMULATION VISUAL OVERLAYS (Bounding Boxes, Lane outlines, Stats) */}
+                  {isSimulating && (
+                    <div className="absolute inset-0 pointer-events-none z-20 font-mono text-[10px] select-none">
+                      
+                      {/* Highway Lane Boundaries Overlays */}
+                      <div className="absolute inset-x-0 bottom-[15%] h-[1px] bg-cyan-500/30 border-dashed border-t"></div>
+                      
+                      {/* Lane Labels */}
+                      <div className="absolute left-[8%] top-[80%] bg-slate-950/80 px-2 py-0.5 rounded text-cyan-400 border border-cyan-800/50 font-bold">
+                        Lane 1 (Slow)
+                      </div>
+                      <div className="absolute left-[30%] top-[80%] bg-slate-950/80 px-2 py-0.5 rounded text-cyan-400 border border-cyan-800/50 font-bold">
+                        Lane 2 (Mid-Slow)
+                      </div>
+                      <div className="absolute left-[52%] top-[80%] bg-slate-950/80 px-2 py-0.5 rounded text-cyan-400 border border-cyan-800/50 font-bold">
+                        Lane 3 (Mid-Fast)
+                      </div>
+                      <div className="absolute right-[8%] top-[80%] bg-red-950/95 px-2 py-0.5 rounded text-red-400 border border-red-700/60 font-bold animate-pulse">
+                        Lane 4: PROHIBITED TRUCKS (SEC 35)
+                      </div>
+
+                      {/* Dynamic Bounding Box Overlay */}
+                      {activeOverlayEvent && (
+                        <div
+                          style={{
+                            position: "absolute",
+                            left: activeOverlayEvent.box.x,
+                            top: activeOverlayEvent.box.y,
+                            width: activeOverlayEvent.box.w,
+                            height: activeOverlayEvent.box.h,
+                            transition: "all 0.5s cubic-bezier(0.25, 0.8, 0.25, 1)"
+                          }}
+                          className={`border-2 ${
+                            activeOverlayEvent.isViolation 
+                              ? "border-red-500 shadow-[0_0_15px_rgba(239,68,68,0.4)]" 
+                              : "border-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.4)]"
+                          } rounded`}
+                        >
+                          {/* Bounding box header label */}
+                          <div className={`absolute top-0 left-0 -translate-y-full px-1.5 py-0.5 ${
+                            activeOverlayEvent.isViolation ? "bg-red-600 text-white" : "bg-emerald-600 text-slate-950 font-bold"
+                          } font-mono font-semibold text-[9px] whitespace-nowrap flex items-center gap-1 rounded-t`}>
+                            <span>{activeOverlayEvent.vehicle}</span>
+                            <span className="opacity-80">({activeOverlayEvent.confidence})</span>
+                          </div>
+
+                          {/* Diagnostic HUD stats inside Bounding Box */}
+                          <div className={`absolute bottom-0 left-0 translate-y-full w-max max-w-[200px] mt-1 bg-slate-950/90 border p-1.5 rounded ${
+                            activeOverlayEvent.isViolation ? "border-red-900 text-red-300" : "border-slate-800 text-slate-300"
+                          }`}>
+                            <div className="flex justify-between gap-2">
+                              <span>Plate:</span>
+                              <span className="font-bold text-white">{activeOverlayEvent.license}</span>
+                            </div>
+                            <div className="flex justify-between gap-2">
+                              <span>Speed:</span>
+                              <span className={activeOverlayEvent.speed > 80 && activeOverlayEvent.isViolation ? "text-red-400 font-bold" : "text-white"}>
+                                {activeOverlayEvent.speed} km/h
+                              </span>
+                            </div>
+                            <div className="flex justify-between gap-2 mt-0.5 border-t border-slate-800/80 pt-0.5">
+                              <span>Status:</span>
+                              <span className={activeOverlayEvent.isViolation ? "text-red-400 font-bold animate-pulse" : "text-emerald-400"}>
+                                {activeOverlayEvent.statusText}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Corner Visual HUD Decorators */}
+                      <div className="absolute top-4 left-4 border-t-2 border-l-2 border-slate-500 w-4 h-4"></div>
+                      <div className="absolute top-4 right-4 border-t-2 border-r-2 border-slate-500 w-4 h-4"></div>
+                      <div className="absolute bottom-4 left-4 border-b-2 border-l-2 border-slate-500 w-4 h-4"></div>
+                      <div className="absolute bottom-4 right-4 border-b-2 border-r-2 border-slate-500 w-4 h-4"></div>
+
+                      {/* Crosshairs & Diagnostics */}
+                      <div className="absolute top-4 left-10 text-[9px] text-slate-500 flex flex-col">
+                        <span>CCTV_1_MAIN_KM18</span>
+                        <span>HD_STREAM_25FPS</span>
+                      </div>
+                      <div className="absolute bottom-4 right-10 text-[9px] text-slate-500 text-right flex flex-col">
+                        <span>LATITUDE: 13.6125° N</span>
+                        <span>LONGITUDE: 100.7588° E</span>
+                      </div>
+                    </div>
+                  )}
+
+                </div>
+
+                {/* Violation Dashboard Quick Counter Overlay */}
+                <div className="bg-slate-900 border-t border-slate-800 p-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide block">Active Targets</span>
+                    <span className="text-lg font-bold font-mono text-cyan-400">{isSimulating ? "4 Vehicles" : "0 Vehicles"}</span>
+                  </div>
+                  <div className="border-l border-slate-800/80">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide block">Violations Detected</span>
+                    <span className="text-lg font-bold font-mono text-red-500 animate-pulse">{violationsCount}</span>
+                  </div>
+                  <div className="border-l border-slate-800/80">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide block">Target Accuracy</span>
+                    <span className="text-lg font-bold font-mono text-emerald-400">{isSimulating ? modelInfo.precision : "94.8%"}</span>
+                  </div>
+                  <div className="border-l border-slate-800/80">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide block">Est. Latency</span>
+                    <span className="text-lg font-bold font-mono text-slate-300">{isSimulating ? modelInfo.latency : "N/A"}</span>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* REAL-TIME SYSTEM CONSOLE & VIOLATIONS LOG */}
+              <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl flex flex-col flex-grow min-h-[260px] max-h-[350px]">
+                
+                {/* Header controls for the console */}
+                <div className="bg-slate-950/80 border-b border-slate-800 px-4 py-3 flex justify-between items-center">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                    <span className="w-2 h-2 bg-red-500 rounded-full animate-ping"></span>
+                    Inference Engine & Violation Stream Logs
+                  </h3>
+
+                  {/* Log filter buttons */}
+                  <div className="flex gap-1.5">
+                    <button
+                      onClick={() => setSystemLogsFilter("all")}
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono border transition-all ${
+                        systemLogsFilter === "all"
+                          ? "bg-slate-800 border-slate-700 text-white font-semibold"
+                          : "bg-slate-950 border-slate-900 text-slate-500 hover:text-slate-300"
+                      }`}
+                    >
+                      ALL
+                    </button>
+                    <button
+                      onClick={() => setSystemLogsFilter("violations")}
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono border transition-all ${
+                        systemLogsFilter === "violations"
+                          ? "bg-red-950/80 border-red-900 text-red-400 font-semibold"
+                          : "bg-slate-950 border-slate-900 text-slate-500 hover:text-slate-300"
+                      }`}
+                    >
+                      VIOLATIONS
+                    </button>
+                    <button
+                      onClick={() => setSystemLogsFilter("system")}
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono border transition-all ${
+                        systemLogsFilter === "system"
+                          ? "bg-slate-800 border-slate-700 text-slate-300"
+                          : "bg-slate-950 border-slate-900 text-slate-500 hover:text-slate-300"
+                      }`}
+                    >
+                      SYSTEM
+                    </button>
+                  </div>
+                </div>
+
+                {/* Logs Body */}
+                <div className="p-4 bg-slate-950/50 flex-grow overflow-y-auto font-mono text-[11px] leading-relaxed space-y-2.5 max-h-[280px]">
+                  {filteredLogs.length === 0 ? (
+                    <div className="text-slate-600 text-center py-8">
+                      No log entries matched selected filter.
+                    </div>
+                  ) : (
+                    filteredLogs.map((log) => {
+                      let badgeColor = "text-slate-500";
+                      let logTextColor = "text-slate-300";
+
+                      if (log.type === "violation") {
+                        badgeColor = "text-red-500 font-bold";
+                        logTextColor = "text-red-400 bg-red-950/30 px-1 py-0.5 rounded border border-red-950/50";
+                      } else if (log.type === "system") {
+                        badgeColor = "text-cyan-500";
+                        logTextColor = "text-slate-400";
+                      } else if (log.type === "info") {
+                        badgeColor = "text-emerald-500";
+                      }
+
+                      return (
+                        <div key={log.id} className="flex items-start gap-2 hover:bg-slate-900/30 transition-colors py-0.5">
+                          <span className="text-slate-600 flex-shrink-0">[{log.time}]</span>
+                          <span className={`flex-shrink-0 uppercase ${badgeColor}`}>
+                            {log.type === "violation" ? "[ALERT]" : `[${log.type}]`}
+                          </span>
+                          <span className={logTextColor}>{log.msg}</span>
+                        </div>
+                      );
+                    })
+                  )}
+                  <div ref={logEndRef} />
+                </div>
+
+                {/* Logs footer */}
+                <div className="bg-slate-950/80 border-t border-slate-800/80 px-4 py-2 flex justify-between items-center text-[10px] text-slate-500 font-mono">
+                  <span>ACTIVE LOGGER STREAMING</span>
+                  <button 
+                    onClick={() => {
+                      setLogFeed([
+                        { id: Date.now(), time: new Date().toLocaleTimeString(), type: "system", msg: "Logs cleared by user command." }
+                      ]);
+                    }}
+                    className="hover:text-white transition-colors underline cursor-pointer"
+                  >
+                    Clear Console
+                  </button>
+                </div>
+
+              </div>
+
+            </section>
+
+          </main>
+
+          {/* FOOTER */}
+          <footer className="relative z-10 mt-6 border-t border-slate-900 pt-4 flex flex-col sm:flex-row justify-between items-center text-xs text-slate-500 gap-2">
+            <p>
+              &copy; 2026 Senior Engineering Capstone Project. All rights reserved.
+            </p>
+            <p className="flex items-center gap-1">
+              <span className="font-semibold text-slate-400">Status:</span> 
+              <span className="text-emerald-500 flex items-center gap-1 font-mono">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                ALL COMPONENT SYSTEMS OPERATIONAL
+              </span>
+            </p>
+          </footer>
+          
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<TrafficDashboard />);
+  </script>
+</body>
+</html>

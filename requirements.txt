@@ -1,0 +1,7 @@
+ultralytics
+supervision
+opencv-python
+numpy
+lap
+fastapi
+uvicorn[standard]
