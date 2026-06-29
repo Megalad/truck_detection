@@ -13,6 +13,8 @@ RUN apt-get update && apt-get install -y \
 
 # Install Python dependencies
 COPY requirements.txt .
+# Explicitly install CPU-only version of PyTorch to save ~4GB of disk space (CUDA is not needed on standard Droplets)
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install Node dependencies

@@ -3,6 +3,7 @@ version: '3.8'
 services:
   node-server:
     build: .
+    image: section35-app
     container_name: section35-node
     command: npm start
     restart: unless-stopped
@@ -14,10 +15,12 @@ services:
       - NODE_ENV=production
 
   python-server:
-    build: .
+    image: section35-app
     container_name: section35-python
     command: python scripts/live_server.py
     restart: unless-stopped
+    depends_on:
+      - node-server
     # Model is pre-downloaded, but we don't need volumes for the live server unless it saves data.
     # We share the same image so it has all the dependencies.
     environment:
