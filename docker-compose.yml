@@ -13,6 +13,10 @@ services:
     environment:
       - PORT=3001
       - NODE_ENV=production
+      - DB_HOST=db
+      - DB_PASSWORD=password
+    depends_on:
+      - db
 
   python-server:
     build: .
@@ -22,10 +26,13 @@ services:
     restart: unless-stopped
     depends_on:
       - node-server
+      - db
     # Model is pre-downloaded, but we don't need volumes for the live server unless it saves data.
     # We share the same image so it has all the dependencies.
     environment:
       - PYTHONUNBUFFERED=1
+      - DB_HOST=db
+      - DB_PASSWORD=password
 
   nginx:
     image: nginx:alpine
@@ -38,3 +45,19 @@ services:
     depends_on:
       - node-server
       - python-server
+
+  db:
+    image: mysql:8.0
+    container_name: section35-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: section35_db
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./setup.sql:/docker-entrypoint-initdb.d/setup.sql:ro
+    ports:
+      - "3306:3306"
+
+volumes:
+  db_data:

@@ -4,6 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import multer from "multer";
+import mysql from "mysql2/promise";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -61,6 +62,30 @@ app.get("/api/models", (_request, response) => {
   });
 
   response.json({ models });
+});
+
+const dbConfig = {
+  host: process.env.DB_HOST || 'localhost',
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASSWORD || '12345678',
+  database: 'section35_db'
+};
+
+app.get("/api/violations", async (request, response) => {
+  try {
+    const connection = await mysql.createConnection(dbConfig);
+    
+    connection.on('error', function(err) {
+      console.error('Database connection error:', err);
+    });
+
+    const [rows] = await connection.execute('SELECT * FROM violations ORDER BY timestamp DESC');
+    await connection.end();
+    response.json({ violations: rows });
+  } catch (error) {
+    console.error("Database Fetch Error:", error);
+    response.status(500).json({ error: "Failed to fetch violations" });
+  }
 });
 
 app.post("/api/infer", upload.single("video"), (request, response) => {

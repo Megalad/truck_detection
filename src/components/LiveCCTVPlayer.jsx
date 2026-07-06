@@ -1,10 +1,13 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 
-const LiveCCTVPlayer = ({ streamUrl, cameraId }) => {
+const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const wsRef = useRef(null);
+  const svgRef = useRef(null);
+  const [polygonPoints, setPolygonPoints] = useState([]);
+  const [isDrawingFinished, setIsDrawingFinished] = useState(false);
 
   useEffect(() => {
     let hls;
@@ -103,6 +106,16 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId }) => {
         try {
           const data = JSON.parse(event.data);
           
+          if (!Array.isArray(data)) {
+            if (data.type === 'VIOLATION_ALERT') {
+              if (onViolationAlert) {
+                const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                onViolationAlert(`🔴 ${data.message} on ${data.camera} at ${timeStr}`);
+              }
+            }
+            return;
+          }
+          
           // Draw the exactly matched frame and its boxes!
           drawFrameAndBoxes(data, pendingDisplayFrame);
           pendingDisplayFrame = null;
@@ -183,6 +196,85 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId }) => {
     });
   };
 
+  const handleSvgClick = (e) => {
+    if (isDrawingFinished) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    setPolygonPoints([...polygonPoints, { x, y }]);
+  };
+
+  const handleClearLane = () => {
+    setPolygonPoints([]);
+    setIsDrawingFinished(false);
+    localStorage.removeItem(`roi_${cameraId}`);
+  };
+
+  const handleFinishDrawing = () => {
+    if (polygonPoints.length < 3) {
+      alert("Please define at least 3 points for the ROI.");
+      return;
+    }
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      alert("WebSocket not connected.");
+      return;
+    }
+    setIsDrawingFinished(true);
+    const rect = svgRef.current.getBoundingClientRect();
+    const normalizedPoints = polygonPoints.map(p => ({
+      x: p.x / rect.width,
+      y: p.y / rect.height
+    }));
+    
+    localStorage.setItem(`roi_${cameraId}`, JSON.stringify(normalizedPoints));
+    
+    wsRef.current.send(JSON.stringify({
+      type: "SET_LANE_ROI",
+      points: normalizedPoints
+    }));
+    alert("ROI Saved!");
+  };
+
+  useEffect(() => {
+    const saved = localStorage.getItem(`roi_${cameraId}`);
+    if (saved) {
+      try {
+        const normalizedPoints = JSON.parse(saved);
+        
+        // Wait briefly for layout to settle so getBoundingClientRect is accurate
+        setTimeout(() => {
+          if (svgRef.current) {
+            const rect = svgRef.current.getBoundingClientRect();
+            // Fallback if width/height is 0 (e.g. display: none)
+            const width = rect.width || 480; 
+            const height = rect.height || 360;
+            const absolutePoints = normalizedPoints.map(p => ({
+              x: p.x * width,
+              y: p.y * height
+            }));
+            setPolygonPoints(absolutePoints);
+            setIsDrawingFinished(true);
+          }
+          
+          // Re-send to backend
+          const sendToBackend = () => {
+             if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                 wsRef.current.send(JSON.stringify({
+                     type: "SET_LANE_ROI",
+                     points: normalizedPoints
+                 }));
+             } else {
+                 setTimeout(sendToBackend, 500);
+             }
+          };
+          sendToBackend();
+        }, 100);
+      } catch (e) {
+        console.error("Error loading ROI", e);
+      }
+    }
+  }, []);
+
   return (
     <div style={{ width: '100%', height: '100%', backgroundColor: 'black', borderRadius: '0 0 8px 8px', overflow: 'hidden', position: 'relative' }}>
       <video
@@ -198,6 +290,48 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId }) => {
         style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
       />
       
+      {/* SVG Overlay for ROI Drawing */}
+      <svg
+        ref={svgRef}
+        onClick={handleSvgClick}
+        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', cursor: isDrawingFinished ? 'default' : 'crosshair', zIndex: 15 }}
+      >
+        {isDrawingFinished && polygonPoints.length >= 3 ? (
+          <polygon
+            points={polygonPoints.map(p => `${p.x},${p.y}`).join(' ')}
+            fill="rgba(255, 0, 0, 0.3)"
+            stroke="red"
+            strokeWidth="3"
+          />
+        ) : (
+          <polyline
+            points={polygonPoints.map(p => `${p.x},${p.y}`).join(' ')}
+            fill="none"
+            stroke="red"
+            strokeWidth="3"
+          />
+        )}
+        {polygonPoints.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r="5" fill="red" />
+        ))}
+      </svg>
+
+      {/* ROI Controls */}
+      <div style={{ position: 'absolute', top: '12px', right: '12px', zIndex: 20, display: 'flex', gap: '8px' }}>
+        <button
+          onClick={handleClearLane}
+          style={{ padding: '6px 12px', backgroundColor: 'rgba(0,0,0,0.6)', color: 'white', border: '1px solid white', borderRadius: '4px', cursor: 'pointer' }}
+        >
+          Clear Lane
+        </button>
+        <button
+          onClick={handleFinishDrawing}
+          style={{ padding: '6px 12px', backgroundColor: '#ef4444', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+        >
+          Finish Drawing
+        </button>
+      </div>
+
       {/* Live Indicator */}
       <div className="live-badge" style={{ position: 'absolute', bottom: '12px', left: '12px', zIndex: 10 }}>
         <span className="dot"></span>
