@@ -29,6 +29,11 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
         hls = new Hls(optimizedHlsConfig);
         hls.loadSource(streamUrl);
         hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          // hls.levels.length - 1 ဆိုတာ အမြင့်ဆုံး Quality (ဥပမာ 1080p) ကို ဆိုလိုပါတယ်
+          hls.currentLevel = hls.levels.length - 1; 
+          console.log(`[${cameraId}] Forced HLS to maximum resolution.`);
+        });
 
         hls.on(Hls.Events.ERROR, (event, data) => {
           if (data.fatal) {
@@ -67,26 +72,18 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
         const video = videoRef.current;
         if (ws.readyState === WebSocket.OPEN && video && !video.paused && !video.ended && video.videoWidth > 0) {
           try {
-            // 1. Capture the scaled-down frame for the AI
+            // 1. Capture the FULL resolution frame for the AI
             const aiCanvas = document.createElement('canvas');
-            aiCanvas.width = 480;
-            aiCanvas.height = Math.round(480 * (video.videoHeight / video.videoWidth)) || 360;
+            aiCanvas.width = video.videoWidth;   // မူလ Resolution အပြည့်ယူမည်
+            aiCanvas.height = video.videoHeight; // မူလ Resolution အပြည့်ယူမည်
             const aiCtx = aiCanvas.getContext('2d');
             aiCtx.drawImage(video, 0, 0, aiCanvas.width, aiCanvas.height);
-            
-            // 2. Capture the full-resolution frame for perfectly synced display
-            const displayCanvas = document.createElement('canvas');
-            displayCanvas.width = video.videoWidth;
-            displayCanvas.height = video.videoHeight;
-            const displayCtx = displayCanvas.getContext('2d');
-            displayCtx.drawImage(video, 0, 0, displayCanvas.width, displayCanvas.height);
-            pendingDisplayFrame = displayCanvas;
             
             aiCanvas.toBlob((blob) => {
               if (blob && ws.readyState === WebSocket.OPEN) {
                 ws.send(blob);
               }
-            }, 'image/jpeg', 0.5); // 50% quality JPEG for speed
+            }, 'image/jpeg', 0.8); // 50% quality JPEG for speed
           } catch (e) {
             console.error(`[${cameraId}] Error capturing frame:`, e);
           }
@@ -99,29 +96,57 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
       ws.onopen = () => {
         console.log(`[${cameraId}] Connected to AI WebSocket`);
         isConnected = true;
+        
+        // Resend ROI on connect/reconnect
+        const saved = localStorage.getItem(`roi_${cameraId}`);
+        if (saved) {
+           try {
+               const normalizedPoints = JSON.parse(saved);
+               ws.send(JSON.stringify({
+                   type: "SET_LANE_ROI",
+                   points: normalizedPoints
+               }));
+           } catch(e) {}
+        }
+        
         sendNextFrame();
       };
 
+      // 🟢 1. ws.onmessage အပိုင်းကို ပြင်ပါ
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
           
-          if (!Array.isArray(data)) {
-            if (data.type === 'VIOLATION_ALERT') {
-              if (onViolationAlert) {
-                const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                onViolationAlert(`🔴 ${data.message} on ${data.camera} at ${timeStr}`);
-              }
+          if (data.type === 'VIOLATION_ALERT') {
+            if (onViolationAlert) {
+              const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              onViolationAlert(`🔴 ${data.message} on ${data.camera} at ${timeStr}`);
             }
             return;
           }
           
-          // Draw the exactly matched frame and its boxes!
-          drawFrameAndBoxes(data, pendingDisplayFrame);
+          // Data အမျိုးအစားခွဲခြားခြင်း
+          let boxesToDraw = [];
+          let currentFps = 0;
+          
+          if (Array.isArray(data)) {
+            boxesToDraw = data; // အဟောင်းအတွက်
+          } else if (data.type === 'BBOX_DATA') {
+            boxesToDraw = data.boxes;
+            currentFps = data.fps; // FPS ကို ယူပါမည်
+          } else {
+            return;
+          }
+          
+          // Draw the exactly matched frame and its boxes! (FPS ပါ ထည့်ပို့မည်)
+          drawFrameAndBoxes(boxesToDraw);
           pendingDisplayFrame = null;
           
           if (isConnected) {
-            requestAnimationFrame(sendNextFrame);
+            // Wait 100ms (approx 3 frames at 30fps) before sending the next frame to the AI
+            setTimeout(() => {
+              requestAnimationFrame(sendNextFrame);
+            }, 100);
           }
         } catch (e) {
           console.error(`[${cameraId}] Error parsing WebSocket message:`, e);
@@ -151,10 +176,10 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
   }, [streamUrl, cameraId]);
 
   // Handle resizing canvas and drawing both the synced frame and bounding boxes
-  const drawFrameAndBoxes = (boxes, displayFrame) => {
+    const drawFrameAndBoxes = (boxes, displayFrame, fps = 0) => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    if (!video || !canvas || !displayFrame) return;
+    if (!video || !canvas) return;
 
     // Match canvas size to the actual displayed video size
     canvas.width = video.clientWidth;
@@ -162,9 +187,6 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
 
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    // Draw the perfectly synced video frame first!
-    ctx.drawImage(displayFrame, 0, 0, canvas.width, canvas.height);
 
     if (!boxes || boxes.length === 0) return;
 
@@ -180,7 +202,7 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
 
       // Draw bounding box
       ctx.strokeStyle = '#22c55e'; // Tailwind Green 500
-      ctx.lineWidth = 3;
+      ctx.lineWidth = 1;
       ctx.strokeRect(x1, y1, w, h);
 
       // Draw label background
@@ -191,7 +213,7 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
 
       // Draw label text
       ctx.fillStyle = 'white';
-      ctx.font = 'bold 14px Arial';
+      ctx.font = '10px Arial';
       ctx.fillText(labelText, x1 + 5, y1 - 7);
     });
   };
@@ -282,7 +304,7 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
         autoPlay
         muted
         playsInline
-        style={{ width: '100%', height: '100%', objectFit: 'fill', opacity: 0 }}
+        style={{ width: '100%', height: '100%', objectFit: 'fill', opacity: 1 }}
       />
       {/* Overlay Canvas for Bounding Boxes AND Video Frames */}
       <canvas
@@ -299,9 +321,9 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
         {isDrawingFinished && polygonPoints.length >= 3 ? (
           <polygon
             points={polygonPoints.map(p => `${p.x},${p.y}`).join(' ')}
-            fill="rgba(255, 0, 0, 0.3)"
+            fill="rgba(255, 0, 0, 0.2)"
             stroke="red"
-            strokeWidth="3"
+            strokeWidth="1"
           />
         ) : (
           <polyline
