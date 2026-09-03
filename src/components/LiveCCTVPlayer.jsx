@@ -8,6 +8,8 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
   const svgRef = useRef(null);
   const [polygonPoints, setPolygonPoints] = useState([]);
   const [isDrawingFinished, setIsDrawingFinished] = useState(false);
+  const [isEditingRoi, setIsEditingRoi] = useState(false);
+  const [normalizedPointsState, setNormalizedPointsState] = useState([]);
 
   useEffect(() => {
     let hls;
@@ -219,7 +221,7 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
   };
 
   const handleSvgClick = (e) => {
-    if (isDrawingFinished) return;
+    if (!isEditingRoi || isDrawingFinished) return;
     const rect = svgRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
@@ -249,6 +251,7 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
     }));
     
     localStorage.setItem(`roi_${cameraId}`, JSON.stringify(normalizedPoints));
+    setNormalizedPointsState(normalizedPoints);
     
     wsRef.current.send(JSON.stringify({
       type: "SET_LANE_ROI",
@@ -256,6 +259,26 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
     }));
     alert("ROI Saved!");
   };
+
+
+  // Responsive Canvas Alignment using ResizeObserver
+  useEffect(() => {
+    if (!svgRef.current) return;
+    const resizeObserver = new ResizeObserver(entries => {
+      for (let entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0 && normalizedPointsState.length > 0) {
+          const absolutePoints = normalizedPointsState.map(p => ({
+            x: p.x * width,
+            y: p.y * height
+          }));
+          setPolygonPoints(absolutePoints);
+        }
+      }
+    });
+    resizeObserver.observe(svgRef.current);
+    return () => resizeObserver.disconnect();
+  }, [normalizedPointsState]);
 
   useEffect(() => {
     const saved = localStorage.getItem(`roi_${cameraId}`);
@@ -275,6 +298,7 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
               y: p.y * height
             }));
             setPolygonPoints(absolutePoints);
+            setNormalizedPointsState(normalizedPoints);
             setIsDrawingFinished(true);
           }
           
@@ -304,7 +328,7 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
         autoPlay
         muted
         playsInline
-        style={{ width: '100%', height: '100%', objectFit: 'fill', opacity: 1 }}
+        style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 1 }}
       />
       {/* Overlay Canvas for Bounding Boxes AND Video Frames */}
       <canvas
@@ -316,7 +340,7 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
       <svg
         ref={svgRef}
         onClick={handleSvgClick}
-        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', cursor: isDrawingFinished ? 'default' : 'crosshair', zIndex: 15 }}
+        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', cursor: (isEditingRoi && !isDrawingFinished) ? 'crosshair' : 'default', zIndex: 15 }}
       >
         {isDrawingFinished && polygonPoints.length >= 3 ? (
           <polygon
@@ -339,19 +363,30 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
       </svg>
 
       {/* ROI Controls */}
+      {/* ROI Controls */}
       <div style={{ position: 'absolute', top: '12px', right: '12px', zIndex: 20, display: 'flex', gap: '8px' }}>
         <button
-          onClick={handleClearLane}
-          style={{ padding: '6px 12px', backgroundColor: 'rgba(0,0,0,0.6)', color: 'white', border: '1px solid white', borderRadius: '4px', cursor: 'pointer' }}
+          onClick={() => setIsEditingRoi(!isEditingRoi)}
+          style={{ padding: '6px 12px', backgroundColor: 'rgba(0,0,0,0.6)', color: 'white', border: '1px solid white', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
         >
-          Clear Lane
+          {isEditingRoi ? '✖' : 'Edit ROI'}
         </button>
-        <button
-          onClick={handleFinishDrawing}
-          style={{ padding: '6px 12px', backgroundColor: '#ef4444', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
-        >
-          Finish Drawing
-        </button>
+        {isEditingRoi && (
+          <>
+            <button
+              onClick={handleClearLane}
+              style={{ padding: '6px 12px', backgroundColor: 'rgba(0,0,0,0.6)', color: 'white', border: '1px solid white', borderRadius: '4px', cursor: 'pointer' }}
+            >
+              Clear Lane
+            </button>
+            <button
+              onClick={handleFinishDrawing}
+              style={{ padding: '6px 12px', backgroundColor: '#358802', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+            >
+              Finish Drawing
+            </button>
+          </>
+        )}
       </div>
 
       {/* Live Indicator */}

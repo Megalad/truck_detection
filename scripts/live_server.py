@@ -1,6 +1,9 @@
 import asyncio
+import functools
 import cv2
 import json
+import reid_engine
+import speed_estimator
 import torch
 import numpy as np
 import ultralytics
@@ -58,13 +61,14 @@ print("Model loaded successfully.")
 # Global state for ROIs and alerts
 camera_rois = {}
 last_alert_times = {}
-COOLDOWN_SECONDS = 2.0
+alerted_track_ids = __import__('collections').defaultdict(set)
+COOLDOWN_SECONDS = 15.0
 
 # Frame buffers and recordings
 frame_buffers = collections.defaultdict(lambda: collections.deque(maxlen=60))
 active_recordings = {}
-camera_track_histories = collections.defaultdict(dict) # 🟢 Live Speed မှတ်ရန် အသစ်ထည့်ပါ
-PIXELS_PER_METER = 20.0
+camera_track_histories = collections.defaultdict(dict) # (legacy) kept for backward compat; speed now handled by speed_estimator
+PIXELS_PER_METER = 20.0  # (legacy) only the uncalibrated fallback in speed_estimator/calibration.json matters now
 
 # DB Config
 DB_CONFIG = {
@@ -95,7 +99,7 @@ def send_telegram_alert(camera_id, speed, snapshot_path):
     except Exception as e:
         print(f"Telegram Error: {e}")
 
-def save_video_and_db(camera_id, frames, violation_id, roi_polygon_json, snapshot_url=""):
+def save_video_and_db(camera_id, frames, violation_id, roi_polygon_json, snapshot_url="", violating_bbox=None, trigger_frame=None):
     evidence_video_url = ""
     
     # 1. Video Writer Block
@@ -120,13 +124,42 @@ def save_video_and_db(camera_id, frames, violation_id, roi_polygon_json, snapsho
         print(f"ERROR: Video Writer failed: {e}")
         return
         
-    # 2. MySQL Insert Block
+    # 2. Re-ID and MySQL Insert Block
     try:
+        # Extract Fingerprint
+        fp_json = None
+        route_match_id = None
+        cam_route = None
+        cam_dir = None
+        cam_km = 0.0
+        
+        if trigger_frame is not None and violating_bbox is not None:
+            fp_vector = reid_engine.get_fingerprint_from_frame(trigger_frame, violating_bbox)
+            if fp_vector:
+                fp_json = json.dumps(fp_vector)
+                
+                # Check DB for match
+                current_time = datetime.now()
+                matched = reid_engine.find_matching_route(DB_CONFIG, fp_vector, camera_id, current_time)
+                
+                if matched:
+                    route_match_id = matched
+                else:
+                    route_match_id = f"ROUTE-{int(current_time.timestamp())}"
+        
+        # Get metadata
+        if camera_id in reid_engine.camera_meta:
+            meta = reid_engine.camera_meta[camera_id]
+            cam_route = meta['route']
+            cam_dir = meta['direction']
+            cam_km = meta['km']
+
         conn = mysql.connector.connect(**DB_CONFIG)
         cursor = conn.cursor()
-        sql = """INSERT INTO violations (violation_id, timestamp, camera_location, roi_polygon, evidence_video_url, video_name, evidence_snapshot_url) 
-                 VALUES (%s, %s, %s, %s, %s, %s, %s)"""
-        val = (violation_id, datetime.now(), camera_id, roi_polygon_json, evidence_video_url, filename, snapshot_url)
+        sql = """INSERT INTO violations 
+                 (violation_id, timestamp, camera_location, roi_polygon, evidence_video_url, video_name, evidence_snapshot_url, fingerprint, route_match_id, camera_route, camera_direction, camera_km) 
+                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+        val = (violation_id, datetime.now(), camera_id, roi_polygon_json, evidence_video_url, filename, snapshot_url, fp_json, route_match_id, cam_route, cam_dir, cam_km)
         print(f"[{camera_id}] Attempting MySQL INSERT for {violation_id}...")
         cursor.execute(sql, val)
         conn.commit()
@@ -166,13 +199,18 @@ async def process_recorded(req: ProcessRequest):
     snapshot_url = ""
     violation_id_str = f"V-{int(time.time())}"
     
-    track_history = {}
-    PIXELS_PER_METER = 20.0
-    
+    # Speed: use a fresh estimator for this job. Time comes from the frame
+    # index / real fps, which is exact for a recorded file (no clock jitter).
+    speed_estimator.reset_estimator(req.camera_id)
+    src_fps = fps if fps and fps > 1 else 30.0
+    frame_idx = 0
+
     while True:
         ret, frame = cap.read()
         if not ret:
             break
+        frame_idx += 1
+        video_time_sec = frame_idx / src_fps
             
         if roi_poly is not None:
             cv2.polylines(frame, [roi_poly.reshape((-1, 1, 2))], isClosed=True, color=(0, 0, 255), thickness=2)
@@ -183,6 +221,7 @@ async def process_recorded(req: ProcessRequest):
 
         boxes = []
         violation_detected = False
+        violating_bbox = None
         new_snapshot_url = ""
         if result.boxes is not None:
                     # 🟢 Track ID များကို ယူပါမည်
@@ -202,25 +241,15 @@ async def process_recorded(req: ProcessRequest):
                             x2_pix = int(coords[2] * w)
                             y2_pix = int(coords[3] * h)
                             
-                            # 🟢 Live Speed တွက်ချက်ခြင်း
-                            cx = (x1_pix + x2_pix) / 2.0
-                            cy = (y1_pix + y2_pix) / 2.0
-                            current_time_sec = time.time()
-                            speed_kmh = 0.0
-                            
-                            if track_id != -1:
-                                if track_id in camera_track_histories[camera_id]:
-                                    prev_cx, prev_cy, prev_time = camera_track_histories[camera_id][track_id]
-                                    time_diff = current_time_sec - prev_time
-                                    if time_diff > 0:
-                                        dist_pixels = ((cx - prev_cx)**2 + (cy - prev_cy)**2)**0.5
-                                        dist_meters = dist_pixels / PIXELS_PER_METER
-                                        speed_mps = dist_meters / time_diff
-                                        speed_kmh = speed_mps * 3.6
-                                
-                                # နောက် Frame တွက်ရန် History မှတ်ခြင်း
-                                camera_track_histories[camera_id][track_id] = (cx, cy, current_time_sec)
-                            
+                            # 🟢 Speed: bottom-centre ground point -> homography/fallback
+                            #    -> constant-velocity Kalman filter (see speed_estimator.py)
+                            estimator = speed_estimator.get_estimator(req.camera_id, w, h)
+                            speed_kmh = estimator.update(
+                                track_id,
+                                (x1_pix, y1_pix, x2_pix, y2_pix),
+                                video_time_sec,
+                            )
+
                             # Box ပေါ်တွင်ပေါ်မည့် စာသား
                             box_label = f"({speed_kmh:.1f} km/h)" if speed_kmh > 0 else "VIOLATION!"
                             
@@ -235,12 +264,14 @@ async def process_recorded(req: ProcessRequest):
                                 
                                 if is_inside_left >= 0 or is_inside_right >= 0:
                                     violation_detected = True
+                                    violating_bbox = (x1_pix, y1_pix, x2_pix, y2_pix)
                                     box_label = f"VIOLATION {speed_kmh:.1f} km/h" # 🔴 ဖောက်ဖျက်လျှင် ပြမည့်စာသား
                                     cv2.rectangle(frame, (int(x1_pix), int(y1_pix)), (int(x2_pix), int(y2_pix)), (0, 0, 255), 2)
                                     cv2.putText(frame, box_label, (int(x1_pix), int(y1_pix) - 10), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
                                     
                                     current_time_chk = time.time()
-                                    if current_time_chk - last_alert_times[camera_id] > COOLDOWN_SECONDS and not new_snapshot_url:
+                                    if track_id != -1 and track_id not in alerted_track_ids[camera_id] and not new_snapshot_url:
+                                        alerted_track_ids[camera_id].add(track_id)
                                         snapshot_dir = os.path.join(base_dir, "public", "evidence_snapshots")
                                         os.makedirs(snapshot_dir, exist_ok=True)
                                         snap_filename = f"V-{int(current_time_chk)}_{camera_id}_snap.jpg"
@@ -260,8 +291,11 @@ async def process_recorded(req: ProcessRequest):
                                 "conf": conf,
                                 "label": box_label # 🟢 React ဆီသို့ Speed ပါ ပို့ပေးမည်
                             })
-        
-        
+
+                    # drop Kalman filters for tracks that left the frame
+                    speed_estimator.get_estimator(req.camera_id, w, h).cleanup(track_ids)
+
+
         end_time = time.time()
         time_diff = end_time - start_time
         if time_diff > 0:
@@ -306,6 +340,16 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
     print(f"[{camera_id}] WebSocket connection opened")
     camera_rois[camera_id] = None
     last_alert_times[camera_id] = 0.0
+
+    # Bug fix (1 + 2): give every connection its OWN model so the per-model
+    # ByteTrack state is not shared between cameras, and run inference in a
+    # worker thread so a slow frame never blocks the asyncio event loop /
+    # the other connected clients.
+    conn_model = YOLO(model_path)
+    loop = asyncio.get_running_loop()
+    speed_estimator.reset_estimator(camera_id)   # fresh Kalman state per connection
+    print(f"[{camera_id}] Loaded a private model instance for this connection")
+
     try:
         while True:
             # Receive message (could be bytes or text)
@@ -349,11 +393,19 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                 start_time = time.time()
                 
                 # 🟢 2. Live အတွက် M2 GPU (mps) နှင့် half=True ကို ထည့်ပေးပါ
-                results = model.track(source=frame, conf=0.5, device="mps", half=True, verbose=False,persist=True)
+                #    Run on a thread so the event loop stays free for other clients.
+                results = await loop.run_in_executor(
+                    None,
+                    functools.partial(
+                        conn_model.track, source=frame, conf=0.5, device="mps",
+                        half=True, verbose=False, persist=True,
+                    ),
+                )
                 result = results[0]
                 
                 boxes = []
                 violation_detected = False
+                violating_bbox = None
                 new_snapshot_url = ""
                 
                 # Setup polygon for point test if ROI is defined
@@ -370,70 +422,30 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                     
                     for i in range(len(result.boxes.cls)):
                         cls_id = int(result.boxes.cls[i].cpu().numpy())
-                        class_name = model.names[cls_id]
+                        class_name = conn_model.names[cls_id]
                         if class_name in ["truck", "heavy_truck"]:
                             coords = result.boxes.xyxyn[i].cpu().numpy()
                             conf = float(result.boxes.conf[i].cpu().numpy())
                             track_id = int(track_ids[i]) if i < len(track_ids) else -1
-                            
+
                             # calculate actual pixel coords
                             x1_pix = int(coords[0] * w)
                             y1_pix = int(coords[1] * h)
                             x2_pix = int(coords[2] * w)
                             y2_pix = int(coords[3] * h)
-                            
-                            # 🟢 Live Speed တွက်ချက်ခြင်း
-                            cx = (x1_pix + x2_pix) / 2.0
-                            cy = (y1_pix + y2_pix) / 2.0
-                            current_time_sec = time.time()
-                            speed_kmh = 0.0
-                            
-                            if track_id != -1:
-                                if track_id in camera_track_histories[camera_id]:
-                                    history_data = camera_track_histories[camera_id][track_id]
-                                    if len(history_data) == 4:
-                                        prev_cx, prev_cy, prev_time, last_speed = history_data
-                                    else:
-                                        prev_cx, prev_cy, prev_time = history_data
-                                        last_speed = 0.0
-                                        
-                                    time_diff = current_time_sec - prev_time
-                                    
-                                    # 🟢 1. Dynamic Zones သတ်မှတ်ခြင်း (y2_pix ပေါ် မူတည်၍)
-                                    if y2_pix < (h * 0.4):
-                                        dynamic_time_buffer = 0.5 
-                                        dynamic_ppm = 12.0  
-                                    elif y2_pix < (h * 0.75):
-                                        dynamic_time_buffer = 0.3
-                                        dynamic_ppm = 20.0
-                                    else:
-                                        dynamic_time_buffer = 0.15
-                                        dynamic_ppm = 35.0
 
-                                    # 🟢 2. Dynamic Buffer ဖြင့် စစ်ဆေးမည်
-                                    if time_diff >= dynamic_time_buffer:
-                                        dist_pixels = ((cx - prev_cx)**2 + (cy - prev_cy)**2)**0.5
-                                        
-                                        if dist_pixels < 10.0:
-                                            speed_kmh = 0.0
-                                        else:
-                                            # 🟢 3. Dynamic PPM ကို သုံးမည်
-                                            dist_meters = dist_pixels / dynamic_ppm
-                                            raw_speed_kmh = (dist_meters / time_diff) * 3.6
-                                            
-                                            # Speed Smoothing (EMA)
-                                            alpha = 0.4 
-                                            if last_speed > 0:
-                                                speed_kmh = (alpha * raw_speed_kmh) + ((1.0 - alpha) * last_speed)
-                                            else:
-                                                speed_kmh = raw_speed_kmh
-                                        
-                                        camera_track_histories[camera_id][track_id] = (cx, cy, current_time_sec, speed_kmh)
-                                    else:
-                                        speed_kmh = last_speed
-                                else:
-                                    camera_track_histories[camera_id][track_id] = (cx, cy, current_time_sec, 0.0)
-                            
+                            # 🟢 Speed: bottom-centre ground point -> homography (if the
+                            #    camera is calibrated in calibration.json) or a constant
+                            #    fallback scale -> constant-velocity Kalman filter.
+                            #    See scripts/speed_estimator.py for the full explanation.
+                            current_time_sec = time.time()
+                            estimator = speed_estimator.get_estimator(camera_id, w, h)
+                            speed_kmh = estimator.update(
+                                track_id,
+                                (x1_pix, y1_pix, x2_pix, y2_pix),
+                                current_time_sec,
+                            )
+
                             # Box ပေါ်တွင်ပေါ်မည့် စာသား
                             box_label = f"{speed_kmh:.1f} km/h" if speed_kmh > 0 else "Tracking..."
                             
@@ -448,12 +460,14 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                                 
                                 if is_inside_left >= 0 or is_inside_right >= 0:
                                     violation_detected = True
+                                    violating_bbox = (x1_pix, y1_pix, x2_pix, y2_pix)
                                     box_label = f"VIOLATION ({speed_kmh:.1f} km/h)" # 🔴 ဖောက်ဖျက်လျှင် ပြမည့်စာသား
                                     cv2.rectangle(frame, (int(x1_pix), int(y1_pix)), (int(x2_pix), int(y2_pix)), (0, 0, 255), 2)
                                     cv2.putText(frame, box_label, (int(x1_pix), int(y1_pix) - 10), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
                                     
                                     current_time_chk = time.time()
-                                    if current_time_chk - last_alert_times[camera_id] > COOLDOWN_SECONDS and not new_snapshot_url:
+                                    if track_id != -1 and track_id not in alerted_track_ids[camera_id] and not new_snapshot_url:
+                                        alerted_track_ids[camera_id].add(track_id)
                                         snapshot_dir = os.path.join(base_dir, "public", "evidence_snapshots")
                                         os.makedirs(snapshot_dir, exist_ok=True)
                                         snap_filename = f"V-{int(current_time_chk)}_{camera_id}_snap.jpg"
@@ -473,7 +487,10 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                                 "conf": conf,
                                 "label": box_label # 🟢 React ဆီသို့ Speed ပါ ပို့ပေးမည်
                             })
-                
+
+                    # drop Kalman filters for tracks that left the frame
+                    speed_estimator.get_estimator(camera_id, w, h).cleanup(track_ids)
+
                 # Send violation alert if needed
                 fps = 0.0
                 time_diff = time.time() - start_time
@@ -492,7 +509,9 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                             'remaining': 30,
                             'violation_id': violation_id,
                             'roi_polygon': json.dumps(camera_rois[camera_id]),
-                            'snapshot_url': new_snapshot_url
+                            'snapshot_url': new_snapshot_url,
+                            'violating_bbox': violating_bbox,
+                            'trigger_frame': frame.copy()
                         }
                         
                         alert_msg = {
@@ -514,6 +533,12 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
         print(f"[{camera_id}] WebSocket disconnected")
     except Exception as e:
         print(f"[{camera_id}] Error in WebSocket loop: {e}")
+    finally:
+        # Free this connection's Kalman filters and its alerted-track set so
+        # state does not leak between connections / grow without bound.
+        speed_estimator.reset_estimator(camera_id)
+        alerted_track_ids.pop(camera_id, None)
+        print(f"[{camera_id}] Connection state cleaned up")
 
 if __name__ == "__main__":
     import uvicorn
