@@ -3,11 +3,142 @@ import "./styles.css";
 import LiveCCTVPlayer from "./components/LiveCCTVPlayer";
 import CameraNetworkMap from "./components/CameraNetworkMap";
 import RecordedPlayback from "./components/RecordedPlayback";
+import ProjectReport from "./components/ProjectReport";
+
+
+function CameraFullView({ cameraId, cameraTitle, streamUrl, cameraInfoList, onClose, onViolationAlert }) {
+  const info = cameraInfoList.find(c => c.title && c.title.includes(cameraId));
+  const [recentLogs, setRecentLogs] = useState([]);
+  
+  useEffect(() => {
+    const fetchLogs = () => {
+      fetch('/api/violations')
+        .then(res => res.json())
+        .then(data => {
+          if (data.violations) {
+            const filtered = data.violations
+               .filter(v => v.camera_location === cameraId)
+               .sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp))
+               .slice(0, 10);
+            setRecentLogs(filtered);
+          }
+        });
+    };
+    fetchLogs();
+    const interval = setInterval(fetchLogs, 5000);
+    return () => clearInterval(interval);
+  }, [cameraId]);
+
+  return (
+    <div className="camera-full-view" style={{ display: 'flex', flexWrap: 'wrap', gap: '24px', height: '100%' }}>
+      {/* LEFT COLUMN: Video & Details */}
+      <div style={{ flex: '1 1 65%', minWidth: '320px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+         <button onClick={onClose} style={{ alignSelf: 'flex-start', padding: '8px 16px', backgroundColor: '#334155', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
+           &larr; Back to Grid
+         </button>
+         
+         <div style={{ backgroundColor: '#0f172a', borderRadius: '12px', overflow: 'hidden', border: '1px solid #334155' }}>
+           <div style={{ padding: '16px', backgroundColor: '#0f172a', borderBottom: '1px solid #334155' }}>
+             <h2 style={{ margin: 0, color: 'white' }}>{cameraTitle}</h2>
+           </div>
+           <div style={{ width: '100%', aspectRatio: '16/9', position: 'relative' }}>
+             <LiveCCTVPlayer streamUrl={streamUrl} cameraId={cameraId} onViolationAlert={onViolationAlert} />
+           </div>
+         </div>
+
+         {info ? (
+           <div style={{ backgroundColor: '#0f172a', padding: '24px', borderRadius: '12px', border: '1px solid #334155', color: '#cbd5e1', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+             <div><strong>Viewpoint (EN):</strong> {info.viewpoint_en}</div>
+             <div><strong>Viewpoint (TH):</strong> {info.viewpoint_th}</div>
+             <div><strong>Route:</strong> {info.route}</div>
+             <div><strong>Direction:</strong> {info.direction === 'R' ? 'Right / Outbound' : 'Left / Inbound'}</div>
+             <div><strong>KM Marker:</strong> {info.km}</div>
+             <div><strong>Coordinates:</strong> {info.latitude}, {info.longitude}</div>
+           </div>
+         ) : (
+           <div style={{ backgroundColor: '#0f172a', padding: '24px', borderRadius: '12px', border: '1px solid #334155', color: '#cbd5e1' }}>
+              Loading camera details from JSON...
+           </div>
+         )}
+      </div>
+
+      {/* RIGHT COLUMN: Violation Logs */}
+      <div style={{ flex: '1 1 30%', minWidth: '300px', backgroundColor: '#0f172a', borderRadius: '12px', border: '1px solid #334155', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100vh - 150px)' }}>
+        <div style={{ padding: '16px', backgroundColor: '#0f172a', borderBottom: '1px solid #334155', borderTopLeftRadius: '12px', borderTopRightRadius: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ width: '10px', height: '10px', backgroundColor: '#ef4444', borderRadius: '50%', boxShadow: '0 0 8px rgba(239,68,68,0.5)' }}></span>
+          <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '16px', fontWeight: '600' }}>Live Violation Logs</h3>
+        </div>
+        <div style={{ overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+           {recentLogs.length === 0 ? (
+             <div style={{ color: '#64748b', textAlign: 'center', padding: '40px 20px' }}>No recent violations.</div>
+           ) : (
+             recentLogs.map(log => {
+               const shortId = log.violation_id.slice(-6);
+               return (
+                 <div 
+                   key={log.violation_id} 
+                   style={{ 
+                     display: 'flex', 
+                     alignItems: 'center', 
+                     gap: '12px', 
+                     padding: '12px', 
+                     backgroundColor: '#1e293b', 
+                     borderRadius: '8px', 
+                     border: '1px solid #334155', 
+                     cursor: 'pointer',
+                     transition: 'background-color 0.2s ease'
+                   }}
+                   onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#334155'}
+                   onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1e293b'}
+                 >
+                   {/* Thumbnail */}
+                   <div style={{ width: '70px', height: '40px', backgroundColor: '#0f172a', borderRadius: '4px', border: '1px solid #475569', flexShrink: 0, overflow: 'hidden' }}>
+                     {log.evidence_snapshot_url ? (
+                       <img 
+                         src={log.evidence_snapshot_url} 
+                         style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+                         alt="thumb" 
+                       />
+                     ) : (
+                       <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', fontSize: '10px' }}>No Img</div>
+                     )}
+                   </div>
+                   
+                   {/* Details */}
+                   <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}>
+                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                       <span style={{ minWidth: '8px', height: '8px', backgroundColor: '#ef4444', borderRadius: '50%' }}></span>
+                       <span style={{ color: '#f8fafc', fontSize: '14px', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                         V-{shortId}
+                       </span>
+                     </div>
+                     <span style={{ color: '#94a3b8', fontSize: '12px', marginLeft: '14px' }}>
+                       {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                     </span>
+                   </div>
+
+                   {/* Speed Indicator */}
+                   {log.speed_kmh && (
+                     <div style={{ color: '#ef4444', fontSize: '13px', fontWeight: 'bold', fontFamily: 'monospace', whiteSpace: 'nowrap', paddingLeft: '8px' }}>
+                       {log.speed_kmh} km/h
+                     </div>
+                   )}
+                 </div>
+               );
+             })
+           )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function LiveMonitoringView() {
   const camTV73RUrl = "http://1.4.213.19:1929/live/TV73R-M7-64_872-IPT.stream/playlist.m3u8";
   const camTV09LUrl = "http://1.4.213.19:1926/live/TV09L-M7-06_200-SKR.stream/playlist.m3u8";
   const camTV75RUrl = "http://1.4.213.19:1929/live/TV75R-M7-66_826-IPT.stream/playlist.m3u8";
+  const camTV27CL2Url = "http://1.4.213.19:1926/live/TV27CL2-M7-20_790-LKB.stream/playlist.m3u8";
+
 
   const [latestAlert, setLatestAlert] = useState(null);
 
@@ -18,12 +149,38 @@ function LiveMonitoringView() {
     }, 5000);
   };
 
+  
+  const [cameraInfoList, setCameraInfoList] = useState([]);
+  const [expandedCamera, setExpandedCamera] = useState(null);
+
+  useEffect(() => {
+    fetch('/camera.json')
+      .then(res => res.json())
+      .then(json => {
+        if(json.data && json.data.cctv) setCameraInfoList(json.data.cctv);
+      })
+      .catch(err => console.error(err));
+  }, []);
+
   return (
     <section>
-      <div className="live-grid">
+      
+      {expandedCamera ? (
+        <CameraFullView 
+           cameraId={expandedCamera.id} 
+           cameraTitle={expandedCamera.title} 
+           streamUrl={expandedCamera.url} 
+           cameraInfoList={cameraInfoList} 
+           onClose={() => setExpandedCamera(null)} 
+           onViolationAlert={handleViolationAlert} 
+        />
+      ) : (
+        <div className="live-grid">
+
         <article className="camera-panel">
-          <div className="camera-header">
+          <div className="camera-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <strong>TV73R M7-64+872-IPT</strong>
+            <button onClick={() => setExpandedCamera({id: "TV73R", title: "TV73R M7-64+872-IPT", url: camTV73RUrl})} style={{ background: "#3b82f6", color: "white", border: "none", padding: "4px 8px", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>Expand</button>
           </div>
           <div className="video-frame">
             <LiveCCTVPlayer streamUrl={camTV73RUrl} cameraId="TV73R" onViolationAlert={handleViolationAlert} />
@@ -31,8 +188,9 @@ function LiveMonitoringView() {
         </article>
 
         <article className="camera-panel">
-          <div className="camera-header">
+          <div className="camera-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <strong>TV09L M7-06+200-SKR</strong>
+            <button onClick={() => setExpandedCamera({id: "TV09L", title: "TV09L M7-06+200-SKR", url: camTV09LUrl})} style={{ background: "#3b82f6", color: "white", border: "none", padding: "4px 8px", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>Expand</button>
           </div>
           <div className="video-frame">
             <LiveCCTVPlayer streamUrl={camTV09LUrl} cameraId="TV09L" onViolationAlert={handleViolationAlert} />
@@ -40,14 +198,26 @@ function LiveMonitoringView() {
         </article>
 
         <article className="camera-panel">
-          <div className="camera-header">
+          <div className="camera-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <strong>TV75R M7-66+826-PT</strong>
+            <button onClick={() => setExpandedCamera({id: "TV75R", title: "TV75R M7-66+826-PT", url: camTV75RUrl})} style={{ background: "#3b82f6", color: "white", border: "none", padding: "4px 8px", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>Expand</button>
           </div>
           <div className="video-frame">
             <LiveCCTVPlayer streamUrl={camTV75RUrl} cameraId="TV75R" onViolationAlert={handleViolationAlert} />
           </div>
         </article>
+        <article className="camera-panel">
+          <div className="camera-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <strong>TV27CL2 M7-20+790-LKB</strong>
+            <button onClick={() => setExpandedCamera({id: "TV27CL2", title: "TV27CL2 M7-20+790-LKB", url: camTV27CL2Url})} style={{ background: "#3b82f6", color: "white", border: "none", padding: "4px 8px", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>Expand</button>
+          </div>
+          <div className="video-frame">
+            <LiveCCTVPlayer streamUrl={camTV27CL2Url} cameraId="TV27CL2" onViolationAlert={handleViolationAlert} />
+          </div>
+        </article>
       </div>
+      )}
+
 
       <div className="alert-ticker-container">
         <span className="ticker-label">Live Alerts</span>
@@ -187,7 +357,7 @@ function EvidenceHistoryView() {
 
       {selectedViolation && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.8)', zIndex: 1000, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px' }}>
-          <div style={{ backgroundColor: '#1e293b', padding: '24px', borderRadius: '12px', maxWidth: '1200px', width: '100%', maxHeight: '90vh', overflowY: 'auto' }}>
+          <div style={{ backgroundColor: '#0f172a', padding: '24px', borderRadius: '12px', maxWidth: '1200px', width: '100%', maxHeight: '90vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px', alignItems: 'center' }}>
               <h3 style={{ margin: 0, color: 'white', fontSize: '20px' }}>Evidence ID: {selectedViolation.violation_id}</h3>
               <button onClick={() => setSelectedViolation(null)} style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', fontSize: '24px' }}>✕</button>
@@ -317,16 +487,11 @@ export default function App() {
             Evidence & History
           </button>
           <button 
-            className={currentView === "analytics" ? "active" : ""} 
-            onClick={() => setCurrentView("analytics")}
+            className={currentView === "report" ? "active" : ""} 
+            onClick={() => setCurrentView("report")}
+            style={{ backgroundColor: "#3b82f6", color: "white", fontWeight: "bold", marginLeft: "16px", borderRadius: "8px" }}
           >
-            Analytics
-          </button>
-          <button 
-            className={currentView === "status" ? "active" : ""} 
-            onClick={() => setCurrentView("status")}
-          >
-            Node Status
+            📝 Project Report
           </button>
         </nav>
       </header>
@@ -339,8 +504,9 @@ export default function App() {
           <RecordedPlayback />
         </div>
         {currentView === "evidence" && <EvidenceHistoryView />}
-        {currentView === "analytics" && <AnalyticsView />}
-        {currentView === "status" && <NodeStatusView />}
+        
+        
+        {currentView === "report" && <ProjectReport />}
       </main>
     </>
   );
