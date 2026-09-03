@@ -110,7 +110,18 @@ to add it.
 - `web/src/components/ProjectReport.jsx` — added Part 3 + the Kalman chart card (additive only).
 - `web/scripts/kalman_demo.py` — new standalone demo script.
 - `web/public/report/kalman_demo.png`, `web/public/report/kalman_demo.csv` — new generated outputs.
+- `web/scripts/live_server.py` — live-server bug fix (private model + non-blocking inference).
 - `web/REPORT_PAGE_CHANGELOG.md` — this file (new).
+
+**Git:** committed as `33b9e16` and pushed to `origin/main`
+(`github.com/Megalad/truck_detection`) on 2026-09-04. The commit also carries
+teammates' previously-uncommitted edits to `src/App.jsx`,
+`src/components/LiveCCTVPlayer.jsx`, and `setup.sql`. Large videos, model files,
+and the `public/evidence_*` folders were deliberately left out of git.
+
+**Open item:** the Telegram bot token and DB password are still hardcoded in
+`live_server.py` (and were already in git history before this commit) — rotate
+the token and move both to environment variables.
 
 ---
 
