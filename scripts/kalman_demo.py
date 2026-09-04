@@ -47,13 +47,15 @@ import speed_estimator  # noqa: E402  (local module, read-only use)
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--video", default=os.path.join(WEB, "public", "recorded_videos", "re1.mp4"))
-    p.add_argument("--model", default=os.path.join(WEB, "model_v2.pt"))
+    p.add_argument("--model", default=os.environ.get("MODEL_PATH", os.path.join(WEB, "models", "model_v3.pt")))
     p.add_argument("--camera", default="demo")
     p.add_argument("--max-frames", type=int, default=900)
     p.add_argument("--min-samples", type=int, default=25,
                    help="only keep trucks seen at least this many frames")
     p.add_argument("--device", default="mps")
     p.add_argument("--conf", type=float, default=0.7)
+    p.add_argument("--tracker", default=os.path.join(WEB, "trackers", "live_tracker.yaml"),
+                   help="tracker yaml (same one live_server.py uses); pass 'botsort.yaml' for the default")
     p.add_argument("--outdir", default=os.path.join(WEB, "public", "report"))
     p.add_argument("--replot", action="store_true",
                    help="skip inference; rebuild the PNG from an existing kalman_demo.csv")
@@ -79,6 +81,10 @@ def load_model(model_path, device):
 def main():
     args = parse_args()
     os.makedirs(args.outdir, exist_ok=True)
+
+    # allow a MODEL_PATH / --model value that is relative to the web/ folder
+    if not os.path.isabs(args.model):
+        args.model = os.path.join(WEB, args.model)
 
     csv_path = os.path.join(args.outdir, "kalman_demo.csv")
     png_path = os.path.join(args.outdir, "kalman_demo.png")
@@ -127,13 +133,13 @@ def main():
 
         try:
             results = model.track(source=frame, conf=args.conf, device=args.device,
-                                  half=True, verbose=False, persist=True)
+                                  half=True, verbose=False, persist=True, tracker=args.tracker)
         except Exception as exc:
             if args.device != "cpu":
                 print(f"[{args.device}] failed ({exc}); retrying on cpu")
                 args.device = "cpu"
                 results = model.track(source=frame, conf=args.conf, device="cpu",
-                                      verbose=False, persist=True)
+                                      verbose=False, persist=True, tracker=args.tracker)
             else:
                 raise
 

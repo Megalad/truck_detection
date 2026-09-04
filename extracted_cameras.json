@@ -1,0 +1,87 @@
+[
+  {
+    "id": "TV28CL2",
+    "name": "TV28CL2 M9-21+900-TY",
+    "url": "http://1.4.213.19:1922/live/TV28CL2-M9-21_900-TY.stream/playlist.m3u8"
+  },
+  {
+    "id": "TV31L",
+    "name": "TV31L M9-24+000-TY",
+    "url": "http://1.4.213.19:1922/live/TV31L-M9-24_000-TY.stream/playlist.m3u8"
+  },
+  {
+    "id": "TV64CL1",
+    "name": "TV64CL1 M9-47+926-RIT",
+    "url": "http://1.4.213.19:1924/live/TV64CL1-M9-47_926-RIT.stream/playlist.m3u8"
+  },
+  {
+    "id": "TV73CL1",
+    "name": "TV73CL1 M9-54+000-TC",
+    "url": "http://1.4.213.19:1924/live/TV73CL1-M9-54_000-TC.stream/playlist.m3u8"
+  },
+  {
+    "id": "TV76CL2",
+    "name": "TV76CL2 M9-55+250-ON",
+    "url": "http://1.4.213.19:1925/live/TV76CL2-M9-55_250-ON.stream/playlist.m3u8"
+  },
+  {
+    "id": "TV09L",
+    "name": "TV09L M7-06+200-SKR",
+    "url": "http://1.4.213.19:1926/live/TV09L-M7-06_200-SKR.stream/playlist.m3u8"
+  },
+  {
+    "id": "TV18CL",
+    "name": "TV18CL M7-12+000-LKB",
+    "url": "http://1.4.213.19:1926/live/TV18CL-M7-12_000-LKB.stream/playlist.m3u8"
+  },
+  {
+    "id": "TV20CL",
+    "name": "TV20CL M7-13+400-KSR",
+    "url": "http://1.4.213.19:1926/live/TV20CL-M7-13_400-KSR.stream/playlist.m3u8"
+  },
+  {
+    "id": "TV34L",
+    "name": "TV34L M7-25+600-LKB",
+    "url": "http://1.4.213.19:1927/live/TV34L-M7-25_600-LKB.stream/playlist.m3u8"
+  },
+  {
+    "id": "TV36L",
+    "name": "TV36L M7-28+001-LKB",
+    "url": "http://1.4.213.19:1927/live/TV36L-M7-28_001-LKB.stream/playlist.m3u8"
+  },
+  {
+    "id": "TV47R",
+    "name": "TV47R M7-38+995-BBO",
+    "url": "http://1.4.213.19:1927/live/TV47R-M7-38_995-BBO.stream/playlist.m3u8"
+  },
+  {
+    "id": "TV53R",
+    "name": "TV53R M7-44+992-BBO",
+    "url": "http://1.4.213.19:1928/live/TV53R-M7-44_992-BBO.stream/playlist.m3u8"
+  },
+  {
+    "id": "TV58L",
+    "name": "TV58L M7-50+000-BPK",
+    "url": "http://1.4.213.19:1928/live/TV58L-M7-50_000-BPK.stream/playlist.m3u8"
+  },
+  {
+    "id": "TV75R",
+    "name": "TV75R M7-66+826-PT",
+    "url": "http://1.4.213.19:1929/live/TV75R-M7-66_826-IPT.stream/playlist.m3u8"
+  },
+  {
+    "id": "TV76L",
+    "name": "TV76L M7-68+100-PT",
+    "url": "http://1.4.213.19:1929/live/TV76L-M7-68_100-IPT.stream/playlist.m3u8"
+  },
+  {
+    "id": "TV77R",
+    "name": "TV77R M7-68+999-PT",
+    "url": "http://1.4.213.19:1929/live/TV77R-M7-68_999-IPT.stream/playlist.m3u8"
+  },
+  {
+    "id": "TV13CL1",
+    "name": "TV13CL1 M7-78+780-BP",
+    "url": "http://1.4.213.19:1930/live/TV13CL1-M7-78_780-BP.stream/playlist.m3u8"
+  }
+]

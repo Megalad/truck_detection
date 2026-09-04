@@ -1,0 +1,39 @@
+{
+  "_README": [
+    "Per-camera speed calibration for speed_estimator.py.",
+    "A camera with an 'image_points' + 'world_points_m' pair gets ACCURATE speed",
+    "via a perspective transform (homography). A camera without it falls back to",
+    "a single 'fallback_ppm' (pixels per metre) - rough but stable.",
+    "",
+    "HOW TO CALIBRATE A CAMERA (do this once per fixed camera):",
+    "1. Grab one clear frame from that camera.",
+    "2. Pick 4+ points on the FLAT ROAD surface that form a rectangle you can",
+    "   measure in real life. Thailand motorway references:",
+    "     - lane width  = 3.5 m",
+    "     - dashed lane line = 3 m painted + 6 m gap (9 m pitch)",
+    "3. Read the pixel (x, y) of each point in the frame -> 'image_points'.",
+    "4. Write the same points in metres on a flat map (any origin) ->",
+    "   'world_points_m', in the SAME order.",
+    "5. Add an entry below keyed by the camera id (e.g. 'TV73R', 'camera2').",
+    "",
+    "Keys you may set per camera (all optional):",
+    "  image_points     [[px,py], ...]   >=4, road-plane pixels",
+    "  world_points_m   [[X,Y], ...]     same order, metres",
+    "  fallback_ppm     number            used only if no homography (default 20)",
+    "  max_speed_kmh    number            glitch clamp (default 160)",
+    "  min_samples      integer           frames before a speed is shown (default 3)",
+    "  stationary_mps   number            below this -> report 0 (default 0.6)"
+  ],
+
+  "cameras": {
+    "_example_TV73R": {
+      "image_points":   [[512, 380], [770, 382], [910, 700], [300, 695]],
+      "world_points_m": [[0.0, 0.0], [3.5, 0.0], [3.5, 18.0], [0.0, 18.0]],
+      "max_speed_kmh": 160
+    },
+
+    "camera2": {
+      "fallback_ppm": 20
+    }
+  }
+}

@@ -5,3 +5,22 @@ uploads/
 outputs/
 __pycache__/
 .DS_Store
+
+# Model weights / exports - distribute these outside git (too large, change often)
+models/
+*.pt
+*.mlpackage/
+
+# Generated evidence - not source
+public/evidence_snapshots/
+public/evidence_videos/
+public/report/*.mov
+public/report/*.mp4
+
+# Large media / training artifacts - distribute outside git
+public/recorded_videos/
+public/model1/
+public/model2/
+
+# Machine-local Ultralytics config
+Ultralytics/
