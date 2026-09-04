@@ -51,12 +51,24 @@ CAMERA_STREAMS = {
     # "camera3": "https://camerai1.iticfoundation.org/pass/180.180.242.207:1935/Phase3/PER_3_009_OUT.stream/playlist.m3u8",
 }
 
-# Load YOLO model once
+# Load YOLO model once.
+# Override with MODEL_PATH=... to swap models without editing code. The value may
+# be absolute, or relative to the web/ folder (e.g. MODEL_PATH=models/best.pt).
 base_dir = Path(__file__).parent.parent
-model_path = str(base_dir / "model_v2.pt")
+model_path = os.environ.get("MODEL_PATH", "models/model_v3.pt")
+if not os.path.isabs(model_path):
+    model_path = str(base_dir / model_path)
+if not os.path.exists(model_path):
+    raise FileNotFoundError(f"Model file not found: {model_path} (set MODEL_PATH or place the file there)")
 print(f"Loading YOLO model from {model_path}...")
 model = ultralytics.YOLO(model_path)
 print("Model loaded successfully.")
+
+# Custom BoT-SORT config tuned for the low, uneven live frame rate (fewer
+# track-ID switches). Falls back to ultralytics' default if the file is missing.
+_tracker_cfg = base_dir / "trackers" / "live_tracker.yaml"
+TRACKER_CFG = str(_tracker_cfg) if _tracker_cfg.exists() else "botsort.yaml"
+print(f"Live tracker config: {TRACKER_CFG}")
 
 # Global state for ROIs and alerts
 camera_rois = {}
@@ -398,7 +410,7 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                     None,
                     functools.partial(
                         conn_model.track, source=frame, conf=0.5, device="mps",
-                        half=True, verbose=False, persist=True,
+                        half=True, verbose=False, persist=True, tracker=TRACKER_CFG,
                     ),
                 )
                 result = results[0]
@@ -488,8 +500,9 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                                 "label": box_label # 🟢 React ဆီသို့ Speed ပါ ပို့ပေးမည်
                             })
 
-                    # drop Kalman filters for tracks that left the frame
-                    speed_estimator.get_estimator(camera_id, w, h).cleanup(track_ids)
+                    # drop Kalman filters for tracks that left the frame (with a
+                    # short grace window so a one-frame miss doesn't reset speed)
+                    speed_estimator.get_estimator(camera_id, w, h).cleanup(track_ids, now=time.time())
 
                 # Send violation alert if needed
                 fps = 0.0

@@ -1,0 +1,29 @@
+# Custom BoT-SORT config for the live CCTV feed.
+# Goal: fewer track-ID switches on a low, uneven frame rate (~5-8 fps) with a
+# detector (model_v3 / YOLO11) that flickers box confidence frame to frame.
+# Based on ultralytics' default botsort.yaml with these deliberate changes:
+#   * track_buffer  30 -> 90   keep a lost truck's ID alive much longer
+#   * new_track_thresh 0.25 -> 0.60  a weak/flickering box no longer spawns a
+#                                    brand-new ID every frame
+#   * track_high_thresh 0.25 -> 0.40  first-stage matching uses solid boxes
+#   * match_thresh 0.8 -> 0.9   accept lower-overlap matches -> fewer new IDs
+#   * gmc_method sparseOptFlow -> none   cameras are FIXED, so global motion
+#                                        compensation is wasted compute (also
+#                                        trims per-frame latency)
+
+tracker_type: botsort
+track_high_thresh: 0.40
+track_low_thresh: 0.10
+new_track_thresh: 0.60
+track_buffer: 90
+match_thresh: 0.90
+fuse_score: True
+
+# BoT-SORT specifics
+gmc_method: none
+
+# ReID (kept off - extra compute we do not need here)
+proximity_thresh: 0.5
+appearance_thresh: 0.8
+with_reid: False
+model: auto
