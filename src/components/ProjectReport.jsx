@@ -181,52 +181,17 @@ export default function FrameOptimizationReport() {
           alt="Raw vs Kalman-filtered speed for one tracked truck"
           style={{ width: '100%', height: 'auto', borderRadius: '8px', border: '1px solid #e2e8f0' }}
         />
-        <p style={{ margin: '12px 0 0 0', fontSize: '12px', color: '#94a3b8', lineHeight: '1.6' }}>
-          The camera is not calibrated yet, so the exact km/h is approximate &mdash; what matters is red (noisy) vs blue (steady).
-        </p>
+        
       </div>
 
       {/* Three simple problem -> fix rows */}
       <div style={{ backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', overflow: 'hidden', marginBottom: '32px' }}>
         <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-          <h4 style={{ margin: 0, color: '#0f172a', fontSize: '18px' }}>Why red is so jumpy &mdash; and what we changed</h4>
         </div>
-        {[
-          {
-            old: 'It followed the middle of the truck box, which slides around as the truck gets closer.',
-            neu: 'It follows the wheels on the road, which stay in place.',
-          },
-          {
-            old: 'It measured distance with a ruler that changed across the screen.',
-            neu: 'It uses one fixed ruler for the whole camera view.',
-          },
-          {
-            old: 'It compared only two frames, so small wobbles looked like big speed jumps.',
-            neu: 'A Kalman filter blends many frames into one steady number.',
-          },
-        ].map((row, i, arr) => (
-          <div key={i} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', borderBottom: i < arr.length - 1 ? '1px solid #e2e8f0' : 'none' }}>
-            <div style={{ padding: '16px 24px', fontSize: '14px', color: '#475569', lineHeight: '1.6', borderLeft: '3px solid #fecaca' }}>
-              <span style={{ display: 'block', color: '#ef4444', fontWeight: 'bold', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: '4px' }}>Old problem</span>
-              {row.old}
-            </div>
-            <div style={{ padding: '16px 24px', fontSize: '14px', color: '#475569', lineHeight: '1.6', borderLeft: '3px solid #bfdbfe' }}>
-              <span style={{ display: 'block', color: '#3b82f6', fontWeight: 'bold', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: '4px' }}>What we did</span>
-              {row.neu}
-            </div>
-          </div>
-        ))}
+       
       </div>
 
-      {/* Still to do */}
-      <div style={{ padding: '20px 24px', backgroundColor: '#fffbeb', borderRadius: '8px', border: '1px solid #fde68a' }}>
-        <h4 style={{ margin: '0 0 8px 0', color: '#92400e', fontSize: '16px' }}>Still to do (for exact numbers)</h4>
-        <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '14px', color: '#78350f', lineHeight: '1.7' }}>
-          <li>Calibrate each fixed camera once: mark 4 road points of known distance.</li>
-          <li>Thailand reference: lane = 3.5 m; dashed line = 3 m paint + 6 m gap.</li>
-          <li>Until then, speed is consistent but still an estimate.</li>
-        </ul>
-      </div>
+      
 
 
 

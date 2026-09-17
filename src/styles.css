@@ -121,7 +121,9 @@ main {
 /* LIVE MONITORING VIEW */
 .live-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  /* min(380px, 100%) lets a track shrink to fit viewports narrower than
+     380px instead of forcing horizontal scroll on phones/narrow tablets. */
+  grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr));
   gap: 24px;
   margin-bottom: 32px;
 }

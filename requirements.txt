@@ -6,3 +6,4 @@ lap
 fastapi
 uvicorn[standard]
 mysql-connector-python
+python-dotenv

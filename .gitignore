@@ -24,3 +24,9 @@ public/model2/
 
 # Machine-local Ultralytics config
 Ultralytics/
+
+# Secrets - never commit, see .env.example
+.env
+
+# Misplaced large binary, not source
+Senior Project Posters 1-2025.pdf

@@ -12,11 +12,12 @@ const app = express();
 const port = process.env.PORT || 3001;
 const uploadsPath = path.join(__dirname, "uploads");
 const outputsPath = path.join(__dirname, "outputs");
+const calibrationPath = path.join(__dirname, "public", "calibration_results");
 const localPythonPath = path.join(__dirname, ".venv", "bin", "python");
 const pythonBin = fs.existsSync(localPythonPath) ? localPythonPath : "python3";
 const modelPaths = {
-  model_1: path.join(__dirname, "model_v1.pt"),
-  model_2: path.join(__dirname, "model_v2.pt"),
+  model_1: path.join(__dirname, "models", "model_v1.pt"),
+  model_2: path.join(__dirname, "models", "model_v2.pt"),
 };
 
 fs.mkdirSync(uploadsPath, { recursive: true });
@@ -39,6 +40,7 @@ const upload = multer({
 
 app.use(express.json());
 app.use("/outputs", express.static(outputsPath));
+app.use("/calibration_results", express.static(calibrationPath));
 
 app.get("/api/health", (_request, response) => {
   response.json({

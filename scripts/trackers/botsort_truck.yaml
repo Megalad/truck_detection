@@ -1,0 +1,36 @@
+# BoT-SORT tuned for fixed motorway CCTV + a single "truck" class.
+# Used by live_server.py (model.track(tracker=".../botsort_truck.yaml")).
+#
+# Goal: keep a truck's track_id stable through brief occlusions and detector
+# flicker, because speed_estimator.py resets a vehicle's Kalman filter (and its
+# speed back to "Tracking...") every time the id changes.
+
+tracker_type: botsort
+
+# Association thresholds. The detector is a confident single-class model, so we
+# can raise the first-stage bar for cleaner tracks while still recovering weak
+# boxes in the second stage.
+track_high_thresh: 0.35
+track_low_thresh: 0.10
+new_track_thresh: 0.45      # slower to spawn a brand-new id -> fewer duplicate tracks
+
+# Frames a lost track is kept alive waiting to be re-matched. Motorway trucks
+# get occluded by gantries / other vehicles for up to ~2-3 s; at ~15-25 fps
+# processed, 120 covers that. speed_estimator's LONG_GAP_SECONDS still guards
+# against a stale re-acquire producing a jump.
+track_buffer: 30
+
+# A truck's box changes shape a lot as it passes under the camera (cab only ->
+# cab + trailer). Loosen IoU matching a little so that doesn't break the track.
+match_thresh: 0.6
+fuse_score: True
+
+# Fixed camera: global motion compensation is pure overhead and can inject
+# spurious motion. Turn it off.
+gmc_method: none
+
+# No appearance ReID here (handled separately by reid_engine for cross-camera).
+proximity_thresh: 0.5
+appearance_thresh: 0.8
+with_reid: Trued
+model: auto

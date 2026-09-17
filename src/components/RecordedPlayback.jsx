@@ -1,11 +1,15 @@
 import React, { useState } from 'react';
 import RecordedVideoPlayer from './RecordedVideoPlayer';
+import UploadPlayback from './UploadPlayback';
 
 export default function RecordedPlayback() {
   const [tickerMessage, setTickerMessage] = useState("Viewing raw historical feeds. Draw an ROI and click 'Process Video' to detect violations.");
 
   return (
     <section>
+      <UploadPlayback />
+
+      <h2 className="text-xl font-bold text-gray-900 mb-4">Recorded Camera Feeds</h2>
       <div className="live-grid">
         <article className="camera-panel">
           <div className="camera-header">

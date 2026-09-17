@@ -16,24 +16,340 @@
     "   'world_points_m', in the SAME order.",
     "5. Add an entry below keyed by the camera id (e.g. 'TV73R', 'camera2').",
     "",
+    "Easiest way to build image_points + world_points_m: run",
+    "  python scripts/calibrate_camera.py <camera_id> --image frame.jpg --rectangle --width 3.5 --length 27",
+    "and click the 4 road-rectangle corners; it writes the entry here for you.",
+    "",
     "Keys you may set per camera (all optional):",
-    "  image_points     [[px,py], ...]   >=4, road-plane pixels",
-    "  world_points_m   [[X,Y], ...]     same order, metres",
-    "  fallback_ppm     number            used only if no homography (default 20)",
-    "  max_speed_kmh    number            glitch clamp (default 160)",
-    "  min_samples      integer           frames before a speed is shown (default 3)",
-    "  stationary_mps   number            below this -> report 0 (default 0.6)"
+    "  image_points      [[px,py], ...]  >=4, road-plane pixels",
+    "  world_points_m    [[X,Y], ...]    same order, metres",
+    "  fallback_ppm      number   used only if no homography (default 20)",
+    "  max_speed_kmh     number   glitch clamp (default 160)",
+    "  min_samples       integer  accepted updates before a speed shows (default 3)",
+    "  stationary_mps    number   below this -> report 0 (default 0.6)",
+    "  process_var       number   Kalman: how much velocity may drift (default 2.0)",
+    "  measurement_var   number   Kalman: metre-measurement noise; raise=smoother/laggier (default 1.5)",
+    "  gate_chi2         number   reject a reading beyond this Mahalanobis dist (default 13.8)",
+    "  point_median      integer  frames of median smoothing on the tracked pixel (default 3)",
+    "  window_seconds    number   displacement cross-check window (default 1.0)",
+    "  max_accel_mps2    number   cap on how fast the label may change (default 6.0)",
+    "  conv_var          number   filter must converge below this before reporting (default 20.0)"
   ],
-
   "cameras": {
     "_example_TV73R": {
-      "image_points":   [[512, 380], [770, 382], [910, 700], [300, 695]],
-      "world_points_m": [[0.0, 0.0], [3.5, 0.0], [3.5, 18.0], [0.0, 18.0]],
+      "image_points": [
+        [
+          512,
+          380
+        ],
+        [
+          770,
+          382
+        ],
+        [
+          910,
+          700
+        ],
+        [
+          300,
+          695
+        ]
+      ],
+      "world_points_m": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          3.5,
+          0.0
+        ],
+        [
+          3.5,
+          18.0
+        ],
+        [
+          0.0,
+          18.0
+        ]
+      ],
       "max_speed_kmh": 160
     },
-
     "camera2": {
       "fallback_ppm": 20
+    },
+    "TV73R": {
+      "image_points": [
+        [
+          256,
+          700
+        ],
+        [
+          1024,
+          700
+        ],
+        [
+          1024,
+          365
+        ],
+        [
+          256,
+          365
+        ]
+      ],
+      "world_points_m": [
+        [
+          -9.66,
+          14.57
+        ],
+        [
+          -0.92,
+          14.57
+        ],
+        [
+          -2.23,
+          35.25
+        ],
+        [
+          -23.38,
+          35.25
+        ]
+      ],
+      "max_speed_kmh": 160
+    },
+    "TV27CL2": {
+      "image_points": [
+        [
+          342.0,
+          164.0
+        ],
+        [
+          373.0,
+          162.0
+        ],
+        [
+          422.0,
+          256.0
+        ],
+        [
+          367.0,
+          260.0
+        ]
+      ],
+      "world_points_m": [
+        [
+          0.0,
+          12.0
+        ],
+        [
+          3.5,
+          12.0
+        ],
+        [
+          3.5,
+          0.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "max_speed_kmh": 160
+    },
+    "TV27CL1": {
+      "image_points": [
+        [
+          256,
+          700
+        ],
+        [
+          1024,
+          700
+        ],
+        [
+          1024,
+          372
+        ],
+        [
+          256,
+          372
+        ]
+      ],
+      "world_points_m": [
+        [
+          -4.02,
+          14.86
+        ],
+        [
+          4.9,
+          14.86
+        ],
+        [
+          11.82,
+          35.86
+        ],
+        [
+          -9.69,
+          35.86
+        ]
+      ],
+      "max_speed_kmh": 160
+    },
+    "TV75R": {
+      "image_points": [
+        [
+          962.2934116224851,
+          235.75166220533632
+        ],
+        [
+          979.2038684051464,
+          239.73059321302134
+        ],
+        [
+          182.42293411622487,
+          715.212848631379
+        ],
+        [
+          15.307831793454822,
+          713.2233831275365
+        ]
+      ],
+      "world_points_m": [
+        [
+          0.0,
+          27.0
+        ],
+        [
+          3.5,
+          27.0
+        ],
+        [
+          3.5,
+          0.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "max_speed_kmh": 160
+    },
+    "TV28CL2": {
+      "image_points": [
+        [
+          256,
+          700
+        ],
+        [
+          1024,
+          700
+        ],
+        [
+          1024,
+          337
+        ],
+        [
+          256,
+          337
+        ]
+      ],
+      "world_points_m": [
+        [
+          -4.5,
+          13.46
+        ],
+        [
+          3.58,
+          13.46
+        ],
+        [
+          8.67,
+          32.63
+        ],
+        [
+          -10.91,
+          32.63
+        ]
+      ],
+      "max_speed_kmh": 160
+    },
+    "TV03CL2": {
+      "image_points": [
+        [
+          668.0438184663537,
+          254.44444444444446
+        ],
+        [
+          693.0829420970266,
+          252.44131455399062
+        ],
+        [
+          795.2425665101722,
+          483.80281690140845
+        ],
+        [
+          732.1439749608763,
+          486.8075117370892
+        ]
+      ],
+      "world_points_m": [
+        [
+          0.0,
+          27.0
+        ],
+        [
+          3.5,
+          27.0
+        ],
+        [
+          3.5,
+          0.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "max_speed_kmh": 160
+    },
+    "TV35CL2": {
+      "image_points": [
+        [
+          256,
+          700
+        ],
+        [
+          1024,
+          700
+        ],
+        [
+          1024,
+          333
+        ],
+        [
+          256,
+          333
+        ]
+      ],
+      "world_points_m": [
+        [
+          -1.74,
+          13.31
+        ],
+        [
+          6.25,
+          13.31
+        ],
+        [
+          15.14,
+          32.25
+        ],
+        [
+          -4.21,
+          32.25
+        ]
+      ],
+      "max_speed_kmh": 160
     }
   }
 }

@@ -1,145 +1,101 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import "./styles.css";
 import LiveCCTVPlayer from "./components/LiveCCTVPlayer";
 import CameraNetworkMap from "./components/CameraNetworkMap";
 import RecordedPlayback from "./components/RecordedPlayback";
 import ProjectReport from "./components/ProjectReport";
+import ReportCharts from "./components/ReportCharts";
+import ViewToggle from "./components/ViewToggle";
+import FocusView from "./components/FocusView";
 
+const VideoCard = ({ cam, idx, setActiveCameraIndex, setCurrentView, handleViolationAlert }) => {
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const menuRef = useRef(null);
 
-function CameraFullView({ cameraId, cameraTitle, streamUrl, cameraInfoList, onClose, onViolationAlert }) {
-  const info = cameraInfoList.find(c => c.title && c.title.includes(cameraId));
-  const [recentLogs, setRecentLogs] = useState([]);
-  
   useEffect(() => {
-    const fetchLogs = () => {
-      fetch('/api/violations')
-        .then(res => res.json())
-        .then(data => {
-          if (data.violations) {
-            const filtered = data.violations
-               .filter(v => v.camera_location === cameraId)
-               .sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp))
-               .slice(0, 10);
-            setRecentLogs(filtered);
-          }
-        });
+    const handleClickOutside = (event) => {
+      if (menuRef.current && !menuRef.current.contains(event.target)) {
+        setIsMenuOpen(false);
+      }
     };
-    fetchLogs();
-    const interval = setInterval(fetchLogs, 5000);
-    return () => clearInterval(interval);
-  }, [cameraId]);
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const handleEditRoi = () => {
+    setIsMenuOpen(false);
+    window.dispatchEvent(new CustomEvent(`toggle-roi-${cam.id}`));
+  };
 
   return (
-    <div className="camera-full-view" style={{ display: 'flex', flexWrap: 'wrap', gap: '24px', height: '100%' }}>
-      {/* LEFT COLUMN: Video & Details */}
-      <div style={{ flex: '1 1 65%', minWidth: '320px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-         <button onClick={onClose} style={{ alignSelf: 'flex-start', padding: '8px 16px', backgroundColor: '#334155', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
-           &larr; Back to Grid
-         </button>
-         
-         <div style={{ backgroundColor: '#0f172a', borderRadius: '12px', overflow: 'hidden', border: '1px solid #334155' }}>
-           <div style={{ padding: '16px', backgroundColor: '#0f172a', borderBottom: '1px solid #334155' }}>
-             <h2 style={{ margin: 0, color: 'white' }}>{cameraTitle}</h2>
-           </div>
-           <div style={{ width: '100%', aspectRatio: '16/9', position: 'relative' }}>
-             <LiveCCTVPlayer streamUrl={streamUrl} cameraId={cameraId} onViolationAlert={onViolationAlert} />
-           </div>
-         </div>
+    <article className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-md flex flex-col relative z-0">
+      <div className="px-5 py-4 border-b border-gray-200 flex justify-between items-center bg-white">
+        <strong className="text-gray-900 font-medium tracking-wide">{cam.title}</strong>
+        
+        <div className="relative" ref={menuRef}>
+          <button 
+            onClick={() => setIsMenuOpen(!isMenuOpen)}
+            className="text-gray-500 hover:text-gray-900 p-1 rounded-md hover:bg-gray-100 transition-colors"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="1"></circle>
+              <circle cx="12" cy="5" r="1"></circle>
+              <circle cx="12" cy="19" r="1"></circle>
+            </svg>
+          </button>
 
-         {info ? (
-           <div style={{ backgroundColor: '#0f172a', padding: '24px', borderRadius: '12px', border: '1px solid #334155', color: '#cbd5e1', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
-             <div><strong>Viewpoint (EN):</strong> {info.viewpoint_en}</div>
-             <div><strong>Viewpoint (TH):</strong> {info.viewpoint_th}</div>
-             <div><strong>Route:</strong> {info.route}</div>
-             <div><strong>Direction:</strong> {info.direction === 'R' ? 'Right / Outbound' : 'Left / Inbound'}</div>
-             <div><strong>KM Marker:</strong> {info.km}</div>
-             <div><strong>Coordinates:</strong> {info.latitude}, {info.longitude}</div>
-           </div>
-         ) : (
-           <div style={{ backgroundColor: '#0f172a', padding: '24px', borderRadius: '12px', border: '1px solid #334155', color: '#cbd5e1' }}>
-              Loading camera details from JSON...
-           </div>
-         )}
-      </div>
-
-      {/* RIGHT COLUMN: Violation Logs */}
-      <div style={{ flex: '1 1 30%', minWidth: '300px', backgroundColor: '#0f172a', borderRadius: '12px', border: '1px solid #334155', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100vh - 150px)' }}>
-        <div style={{ padding: '16px', backgroundColor: '#0f172a', borderBottom: '1px solid #334155', borderTopLeftRadius: '12px', borderTopRightRadius: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ width: '10px', height: '10px', backgroundColor: '#ef4444', borderRadius: '50%', boxShadow: '0 0 8px rgba(239,68,68,0.5)' }}></span>
-          <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '16px', fontWeight: '600' }}>Live Violation Logs</h3>
-        </div>
-        <div style={{ overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-           {recentLogs.length === 0 ? (
-             <div style={{ color: '#64748b', textAlign: 'center', padding: '40px 20px' }}>No recent violations.</div>
-           ) : (
-             recentLogs.map(log => {
-               const shortId = log.violation_id.slice(-6);
-               return (
-                 <div 
-                   key={log.violation_id} 
-                   style={{ 
-                     display: 'flex', 
-                     alignItems: 'center', 
-                     gap: '12px', 
-                     padding: '12px', 
-                     backgroundColor: '#1e293b', 
-                     borderRadius: '8px', 
-                     border: '1px solid #334155', 
-                     cursor: 'pointer',
-                     transition: 'background-color 0.2s ease'
-                   }}
-                   onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#334155'}
-                   onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1e293b'}
-                 >
-                   {/* Thumbnail */}
-                   <div style={{ width: '70px', height: '40px', backgroundColor: '#0f172a', borderRadius: '4px', border: '1px solid #475569', flexShrink: 0, overflow: 'hidden' }}>
-                     {log.evidence_snapshot_url ? (
-                       <img 
-                         src={log.evidence_snapshot_url} 
-                         style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
-                         alt="thumb" 
-                       />
-                     ) : (
-                       <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', fontSize: '10px' }}>No Img</div>
-                     )}
-                   </div>
-                   
-                   {/* Details */}
-                   <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}>
-                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                       <span style={{ minWidth: '8px', height: '8px', backgroundColor: '#ef4444', borderRadius: '50%' }}></span>
-                       <span style={{ color: '#f8fafc', fontSize: '14px', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                         V-{shortId}
-                       </span>
-                     </div>
-                     <span style={{ color: '#94a3b8', fontSize: '12px', marginLeft: '14px' }}>
-                       {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                     </span>
-                   </div>
-
-                   {/* Speed Indicator */}
-                   {log.speed_kmh && (
-                     <div style={{ color: '#ef4444', fontSize: '13px', fontWeight: 'bold', fontFamily: 'monospace', whiteSpace: 'nowrap', paddingLeft: '8px' }}>
-                       {log.speed_kmh} km/h
-                     </div>
-                   )}
-                 </div>
-               );
-             })
-           )}
+          {isMenuOpen && (
+            <div className="absolute right-0 mt-2 w-36 bg-white rounded-md shadow-lg border border-gray-200 z-50 py-1">
+              <button
+                onClick={() => {
+                  setActiveCameraIndex(idx);
+                  setCurrentView('focus');
+                  setIsMenuOpen(false);
+                }}
+                className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-amber-600 transition-colors"
+              >
+                Focus
+              </button>
+              <button
+                onClick={handleEditRoi}
+                className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-amber-600 transition-colors border-t border-gray-100"
+              >
+                Edit ROI
+              </button>
+            </div>
+          )}
         </div>
       </div>
-    </div>
+      <div className="relative w-full bg-black aspect-video z-0">
+        <LiveCCTVPlayer streamUrl={cam.url} cameraId={cam.id} onViolationAlert={handleViolationAlert} />
+      </div>
+    </article>
   );
-}
+};
 
 function LiveMonitoringView() {
-  const camTV73RUrl = "http://1.4.213.19:1929/live/TV73R-M7-64_872-IPT.stream/playlist.m3u8";
-  const camTV09LUrl = "http://1.4.213.19:1926/live/TV09L-M7-06_200-SKR.stream/playlist.m3u8";
-  const camTV75RUrl = "http://1.4.213.19:1929/live/TV75R-M7-66_826-IPT.stream/playlist.m3u8";
-  const camTV27CL2Url = "http://1.4.213.19:1926/live/TV27CL2-M7-20_790-LKB.stream/playlist.m3u8";
+  // Stream URLs pulled verbatim from camera.json (the org's master CCTV list) —
+  // same host/port pattern as the three cameras already here, just more of them.
+  const CAMERAS = [
+    { id: "TV27CL1", title: "TV27CL1 M9-21+900-TY", url: "http://1.4.213.19:1922/live/TV27CL1-M9-21_900-TY.stream/playlist.m3u8" },
+    { id: "TV03CL2", title: "TV03CL2 M9-0+000-KL", url: "http://1.4.213.19:1921/live/TV03CL2-M9-0_000-KL.stream/playlist.m3u8" },
+    { id: "TV28CL2", title: "TV28CL2 M9-21+900-TY", url: "http://1.4.213.19:1922/live/TV28CL2-M9-21_900-TY.stream/playlist.m3u8" },
+    { id: "TV55CL2", title: "TV55CL2 M9-43+000-RIT", url: "http://1.4.213.19:1923/live/TV55CL2-M9-43_000-RIT.stream/playlist.m3u8" },
+    { id: "TV64CL1", title: "TV64CL1 M9-47+926-RIT", url: "http://1.4.213.19:1924/live/TV64CL1-M9-47_926-RIT.stream/playlist.m3u8" },
+    { id: "TV73CL1", title: "TV73CL1 M9-54+000-TC", url: "http://1.4.213.19:1924/live/TV73CL1-M9-54_000-TC.stream/playlist.m3u8" },
+    { id: "TV76CL2", title: "TV76CL2 M9-55+250-ON", url: "http://1.4.213.19:1925/live/TV76CL2-M9-55_250-ON.stream/playlist.m3u8" },
+    { id: "TV16CL1", title: "TV16CL1 M7-11+350-RK", url: "http://1.4.213.19:1926/live/TV16CL1-M7-11_350-RK.stream/playlist.m3u8" },
+    { id: "TV18CL", title: "TV18CL M7-12+000-LKB", url: "http://1.4.213.19:1926/live/TV18CL-M7-12_000-LKB.stream/playlist.m3u8" },
+    { id: "TV20CL", title: "TV20CL M7-13+400-KSR", url: "http://1.4.213.19:1926/live/TV20CL-M7-13_400-KSR.stream/playlist.m3u8" },
+    { id: "TV27CL2", title: "TV27CL2 M7-20+790-LKB", url: "http://1.4.213.19:1926/live/TV27CL2-M7-20_790-LKB.stream/playlist.m3u8" },
+    { id: "TV11L", title: "TV11L M7-1+250-BP", url: "http://1.4.213.19:1932/live/TV11L-M7-0_050-BP.stream/playlist.m3u8" },
+    { id: "TV13CL1", title: "TV13CL1 M7-78+780-BP", url: "http://1.4.213.19:1930/live/TV13CL1-M7-78_780-BP.stream/playlist.m3u8" },
+    { id: "TV67R", title: "TV67R M7-78+850-BP", url: "http://1.4.213.19:1930/live/TV67R-M7-78_850-BP.stream/playlist.m3u8" },
+    { id: "TV35CL2", title: "TV35CL2 M7-99+430-NK", url: "http://1.4.213.19:1931/live/TV35CL2-M7-99_430-NK.stream/playlist.m3u8" },
+  ];
 
-
+  const [currentView, setCurrentView] = useState("grid");
+  const [activeCameraIndex, setActiveCameraIndex] = useState(0);
   const [latestAlert, setLatestAlert] = useState(null);
 
   const handleViolationAlert = (alertMsg) => {
@@ -149,9 +105,7 @@ function LiveMonitoringView() {
     }, 5000);
   };
 
-  
   const [cameraInfoList, setCameraInfoList] = useState([]);
-  const [expandedCamera, setExpandedCamera] = useState(null);
 
   useEffect(() => {
     fetch('/camera.json')
@@ -164,70 +118,91 @@ function LiveMonitoringView() {
 
   return (
     <section>
-      
-      {expandedCamera ? (
-        <CameraFullView 
-           cameraId={expandedCamera.id} 
-           cameraTitle={expandedCamera.title} 
-           streamUrl={expandedCamera.url} 
-           cameraInfoList={cameraInfoList} 
-           onClose={() => setExpandedCamera(null)} 
-           onViolationAlert={handleViolationAlert} 
-        />
-      ) : (
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-xl font-bold text-gray-900">Live Camera Feeds</h2>
+        <ViewToggle currentView={currentView} onViewChange={setCurrentView} />
+      </div>
+
+      {currentView === 'grid' ? (
         <div className="live-grid">
-
-        <article className="camera-panel">
-          <div className="camera-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <strong>TV73R M7-64+872-IPT</strong>
-            <button onClick={() => setExpandedCamera({id: "TV73R", title: "TV73R M7-64+872-IPT", url: camTV73RUrl})} style={{ background: "#3b82f6", color: "white", border: "none", padding: "4px 8px", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>Expand</button>
-          </div>
-          <div className="video-frame">
-            <LiveCCTVPlayer streamUrl={camTV73RUrl} cameraId="TV73R" onViolationAlert={handleViolationAlert} />
-          </div>
-        </article>
-
-        <article className="camera-panel">
-          <div className="camera-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <strong>TV09L M7-06+200-SKR</strong>
-            <button onClick={() => setExpandedCamera({id: "TV09L", title: "TV09L M7-06+200-SKR", url: camTV09LUrl})} style={{ background: "#3b82f6", color: "white", border: "none", padding: "4px 8px", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>Expand</button>
-          </div>
-          <div className="video-frame">
-            <LiveCCTVPlayer streamUrl={camTV09LUrl} cameraId="TV09L" onViolationAlert={handleViolationAlert} />
-          </div>
-        </article>
-
-        <article className="camera-panel">
-          <div className="camera-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <strong>TV75R M7-66+826-PT</strong>
-            <button onClick={() => setExpandedCamera({id: "TV75R", title: "TV75R M7-66+826-PT", url: camTV75RUrl})} style={{ background: "#3b82f6", color: "white", border: "none", padding: "4px 8px", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>Expand</button>
-          </div>
-          <div className="video-frame">
-            <LiveCCTVPlayer streamUrl={camTV75RUrl} cameraId="TV75R" onViolationAlert={handleViolationAlert} />
-          </div>
-        </article>
-        <article className="camera-panel">
-          <div className="camera-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <strong>TV27CL2 M7-20+790-LKB</strong>
-            <button onClick={() => setExpandedCamera({id: "TV27CL2", title: "TV27CL2 M7-20+790-LKB", url: camTV27CL2Url})} style={{ background: "#3b82f6", color: "white", border: "none", padding: "4px 8px", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>Expand</button>
-          </div>
-          <div className="video-frame">
-            <LiveCCTVPlayer streamUrl={camTV27CL2Url} cameraId="TV27CL2" onViolationAlert={handleViolationAlert} />
-          </div>
-        </article>
-      </div>
-      )}
-
-
-      <div className="alert-ticker-container">
-        <span className="ticker-label">Live Alerts</span>
-        <div className="ticker-scroll">
-          <div className="ticker-content">
-            {latestAlert ? latestAlert : "No current alerts."}
-          </div>
+          {CAMERAS.map((cam, idx) => (
+            <VideoCard
+              key={cam.id}
+              cam={cam}
+              idx={idx}
+              setActiveCameraIndex={setActiveCameraIndex}
+              setCurrentView={setCurrentView}
+              handleViolationAlert={handleViolationAlert}
+            />
+          ))}
         </div>
-      </div>
+      ) : (
+        <FocusView
+          cameras={CAMERAS}
+          activeCameraIndex={activeCameraIndex}
+          setActiveCameraIndex={setActiveCameraIndex}
+          handleViolationAlert={handleViolationAlert}
+          cameraInfoList={cameraInfoList}
+        />
+      )}
     </section>
+  );
+}
+
+// Shows an evidence snapshot, falling back to a neutral placeholder when the
+// URL is missing/empty or the image fails to load (e.g. legacy rows whose
+// media paths now 404). `thumb` renders the compact ~80px table version.
+function EvidenceSnapshot({ src, thumb = false }) {
+  const [failed, setFailed] = useState(false);
+
+  if (!src || failed) {
+    return (
+      <div
+        style={{
+          width: thumb ? 80 : "100%",
+          height: thumb ? 48 : 260,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: "#f3f4f6",
+          color: "#9ca3af",
+          border: "1px dashed #e5e7eb",
+          borderRadius: "8px",
+          fontSize: thumb ? "10px" : "14px",
+          textAlign: "center",
+          padding: thumb ? "2px" : "20px",
+          boxSizing: "border-box",
+        }}
+      >
+        No snapshot{thumb ? "" : " available for this record."}
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt="Evidence snapshot"
+      onError={() => setFailed(true)}
+      style={
+        thumb
+          ? {
+              width: 80,
+              height: 48,
+              objectFit: "cover",
+              borderRadius: "8px",
+              border: "1px solid #334155",
+              display: "block",
+            }
+          : {
+              width: "100%",
+              maxHeight: "70vh",
+              objectFit: "contain",
+              borderRadius: "8px",
+              display: "block",
+            }
+      }
+    />
   );
 }
 
@@ -270,138 +245,134 @@ function EvidenceHistoryView() {
     return matchesId && matchesDate && matchesCamera;
   });
 
+  // Camera options come from whatever cameras actually have logged violations,
+  // so the filter never lists a camera with nothing to show or - worse - omits
+  // one that does (a hardcoded 3-camera list previously made every other
+  // camera silently return "no violations" when selected, which it can't be,
+  // since there's no way to select it).
+  const cameraOptions = useMemo(() => {
+    const set = new Set(violations.map((v) => v.camera_location).filter(Boolean));
+    return ["All Cameras", ...[...set].sort()];
+  }, [violations]);
+
   const handleClearFilters = () => {
     setSearchId("");
     setFilterDate("");
     setFilterCamera("All Cameras");
   };
 
+  // Speed is recorded at violation time; tolerate whichever field name the API
+  // sends (or none) and never throw on a missing value.
+  const formatSpeed = (row) => {
+    const raw = row.speed_kmh ?? row.speed ?? row.violation_speed;
+    const num = Number(raw);
+    if (raw === undefined || raw === null || raw === "" || Number.isNaN(num)) return "—";
+    return `${num.toFixed(1)} km/h`;
+  };
+
   return (
-    <section className="evidence-container" style={{ position: 'relative' }}>
+    <section className="bg-gray-50 relative">
       
-      {/* Filter Bar (Tailwind CSS) */}
-      <div className="bg-white p-4 mb-6 rounded-lg border border-gray-200 shadow-sm flex flex-col md:flex-row gap-4 items-end" style={{ backgroundColor: 'white', padding: '16px', marginBottom: '24px', borderRadius: '8px', border: '1px solid #e5e7eb', display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+      {/* Filter Bar */}
+      <div className="bg-white p-4 mb-6 rounded-xl border border-gray-200 shadow-sm flex flex-col md:flex-row gap-4 items-stretch md:items-end">
         
-        <div style={{ flex: '1 1 200px' }}>
-          <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '4px' }}>Search ID</label>
+        <div className="flex-1 min-w-[200px]">
+          <label className="block text-sm font-medium text-gray-700 mb-1">Search ID</label>
           <input 
             type="text" 
             placeholder="Search by Violation ID..." 
-            style={{ width: '100%', padding: '8px 16px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '14px', color: '#1f2937' }}
+            className="w-full px-4 py-2 bg-white text-gray-900 border border-gray-300 rounded-lg text-sm placeholder-gray-400 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
             value={searchId}
             onChange={(e) => setSearchId(e.target.value)}
           />
         </div>
 
-        <div style={{ flex: '1 1 200px' }}>
-          <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '4px' }}>Date</label>
+        <div className="flex-1 min-w-[200px]">
+          <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
           <input 
             type="date" 
-            style={{ width: '100%', padding: '8px 16px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '14px', color: '#1f2937' }}
+            className="w-full px-4 py-2 bg-white text-gray-900 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
             value={filterDate}
             onChange={(e) => setFilterDate(e.target.value)}
           />
         </div>
 
-        <div style={{ flex: '1 1 200px' }}>
-          <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '4px' }}>Camera Location</label>
+        <div className="flex-1 min-w-[200px]">
+          <label className="block text-sm font-medium text-gray-700 mb-1">Camera Location</label>
           <select 
-            style={{ width: '100%', padding: '8px 16px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '14px', color: '#1f2937', backgroundColor: 'white' }}
+            className="w-full px-4 py-2 bg-white text-gray-900 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
             value={filterCamera}
             onChange={(e) => setFilterCamera(e.target.value)}
           >
-            <option value="All Cameras">All Cameras</option>
-            <option value="TV73R">TV73R</option>
-            <option value="TV09L">TV09L</option>
-            <option value="TV75R">TV75R</option>
+            {cameraOptions.map((cam) => (
+              <option key={cam} value={cam}>{cam}</option>
+            ))}
           </select>
         </div>
 
         <button 
           onClick={handleClearFilters}
-          style={{ padding: '8px 20px', backgroundColor: '#f9fafb', color: '#4b5563', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '14px', fontWeight: '500', cursor: 'pointer', height: '38px', whiteSpace: 'nowrap' }}
-          onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f3f4f6'}
-          onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#f9fafb'}
+          className="px-5 py-2 h-[38px] text-sm font-medium rounded-lg text-gray-600 hover:text-gray-900 hover:bg-gray-100 border border-gray-300 transition-colors whitespace-nowrap"
         >
           Clear Filters
         </button>
       </div>
 
-      <table className="evidence-table">
-        <thead>
-          <tr>
-            <th>Violation ID</th>
-            <th>Video Name</th>
-            <th>Timestamp</th>
-            <th>Camera Location</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {filteredViolations.map((row) => (
-            <tr key={row.id}>
-              <td><strong>{row.violation_id}</strong></td>
-              <td>{row.video_name || "N/A"}</td>
-              <td>{new Date(row.timestamp).toLocaleString()}</td>
-              <td>{row.camera_location}</td>
-              <td>
-                <button className="btn-evidence" onClick={() => setSelectedViolation(row)}>View Evidence</button>
-              </td>
+      {/* Table Container */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <table className="w-full text-left border-collapse">
+          <thead className="bg-gray-50 text-gray-500 text-xs font-semibold uppercase border-b border-gray-200">
+            <tr>
+              <th className="px-6 py-4">Violation ID</th>
+              <th className="px-6 py-4">Snapshot</th>
+              <th className="px-6 py-4">Timestamp</th>
+              <th className="px-6 py-4">Camera Location</th>
+              <th className="px-6 py-4">Speed</th>
+              <th className="px-6 py-4">Action</th>
             </tr>
-          ))}
-          {filteredViolations.length === 0 && (
-            <tr><td colSpan="5" style={{ textAlign: 'center', padding: '30px', color: '#64748b' }}>No violations found matching filters.</td></tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="text-gray-900">
+            {filteredViolations.map((row) => (
+              <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                <td className="px-6 py-4 font-medium">{row.violation_id}</td>
+                <td className="px-6 py-4"><EvidenceSnapshot src={row.evidence_snapshot_url} thumb /></td>
+                <td className="px-6 py-4">{new Date(row.timestamp).toLocaleString()}</td>
+                <td className="px-6 py-4">{row.camera_location}</td>
+                <td className="px-6 py-4">{formatSpeed(row)}</td>
+                <td className="px-6 py-4">
+                  <button 
+                    className="bg-amber-600 hover:bg-amber-700 text-white transition-colors border-none px-4 py-2 rounded-lg font-semibold text-xs" 
+                    onClick={() => setSelectedViolation(row)}
+                  >
+                    View Evidence
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {filteredViolations.length === 0 && (
+              <tr><td colSpan="6" className="text-center py-8 text-gray-500">No violations found matching filters.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
 
       {selectedViolation && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.8)', zIndex: 1000, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px' }}>
-          <div style={{ backgroundColor: '#0f172a', padding: '24px', borderRadius: '12px', maxWidth: '1200px', width: '100%', maxHeight: '90vh', overflowY: 'auto' }}>
+          <div style={{ backgroundColor: '#ffffff', padding: '24px', borderRadius: '12px', maxWidth: '1200px', width: '100%', maxHeight: '90vh', overflowY: 'auto', border: '1px solid #e5e7eb' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px', alignItems: 'center' }}>
-              <h3 style={{ margin: 0, color: 'white', fontSize: '20px' }}>Evidence ID: {selectedViolation.violation_id}</h3>
-              <button onClick={() => setSelectedViolation(null)} style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', fontSize: '24px' }}>✕</button>
+              <h3 style={{ margin: 0, color: '#111827', fontSize: '20px' }}>Evidence ID: {selectedViolation.violation_id}</h3>
+              <button onClick={() => setSelectedViolation(null)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '24px' }}>✕</button>
             </div>
             
-            <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
-              {/* Left Column - Money Shot */}
-              <div style={{ flex: '1 1 400px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <h4 style={{ margin: 0, color: '#94a3b8' }}>The Proof (Money Shot)</h4>
-                {selectedViolation.evidence_snapshot_url ? (
-                  <div style={{ borderRadius: '8px', overflow: 'hidden', border: '2px solid #334155', backgroundColor: '#000', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                    <img 
-                      src={selectedViolation.evidence_snapshot_url} 
-                      alt="Violation Snapshot" 
-                      style={{ width: '100%', maxHeight: '400px', display: 'block', objectFit: 'contain' }} 
-                    />
-                  </div>
-                ) : (
-                  <div style={{ padding: '40px', textAlign: 'center', backgroundColor: '#0f172a', borderRadius: '8px', color: '#64748b', border: '2px dashed #334155' }}>
-                    No snapshot available for this record.
-                  </div>
-                )}
-                <div style={{ backgroundColor: '#0f172a', padding: '16px', borderRadius: '8px', fontSize: '14px', color: '#cbd5e1' }}>
-                  <p style={{ margin: '0 0 8px 0' }}><strong>Timestamp:</strong> {new Date(selectedViolation.timestamp).toLocaleString()}</p>
-                  <p style={{ margin: 0 }}><strong>Location:</strong> {selectedViolation.camera_location}</p>
-                </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <h4 style={{ margin: 0, color: '#6b7280' }}>The Proof (Money Shot)</h4>
+              <div className="border-2 border-yellow-400 rounded-lg overflow-hidden bg-black shadow-sm">
+                <EvidenceSnapshot src={selectedViolation.evidence_snapshot_url} />
               </div>
-
-              {/* Right Column - Video Context */}
-              <div style={{ flex: '1 1 500px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <h4 style={{ margin: 0, color: '#94a3b8' }}>Video Context</h4>
-                <div style={{ position: 'relative', width: '100%', borderRadius: '8px', overflow: 'hidden', border: '2px solid #334155', backgroundColor: '#000' }}>
-                  <video controls autoPlay loop muted src={selectedViolation.evidence_video_url} style={{ width: '100%', display: 'block' }} />
-                  {selectedViolation.roi_polygon && (
-                    <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }} viewBox="0 0 1 1" preserveAspectRatio="none">
-                      <polygon 
-                        points={(typeof selectedViolation.roi_polygon === 'string' ? JSON.parse(selectedViolation.roi_polygon) : selectedViolation.roi_polygon).map(p => `${p.x},${p.y}`).join(' ')} 
-                        fill="rgba(255, 0, 0, 0.2)" 
-                        stroke="red" 
-                        strokeWidth="0.005" 
-                      />
-                    </svg>
-                  )}
-                </div>
+              <div style={{ backgroundColor: '#f9fafb', padding: '16px', borderRadius: '8px', fontSize: '14px', color: '#374151', border: '1px solid #e5e7eb' }}>
+                <p style={{ margin: '0 0 8px 0' }}><strong>Timestamp:</strong> {new Date(selectedViolation.timestamp).toLocaleString()}</p>
+                <p style={{ margin: '0 0 8px 0' }}><strong>Location:</strong> {selectedViolation.camera_location}</p>
+                <p style={{ margin: 0 }}><strong>Speed:</strong> {formatSpeed(selectedViolation)}</p>
               </div>
             </div>
           </div>
@@ -461,42 +432,46 @@ export default function App() {
 
   return (
     <>
-      <header>
-        <div className="header-brand">
-          <span className="team-name">Team Unique</span>
-          <h1 className="portal-title">Do Do System</h1>
-          <p className="portal-subtitle">Monitoring system for right-lane truck violations.</p>
+      <header className="flex flex-wrap justify-between items-end gap-x-6 gap-y-2 px-4 sm:px-8 pt-6 bg-white shadow-sm border-b border-gray-200">
+        <div className="flex flex-col gap-1 pb-5">
+          <span className="text-amber-600 text-xs font-bold uppercase tracking-wider">By Team Unique</span>
+          <h1 className="text-gray-900 text-3xl font-extrabold tracking-tight">Do Do Vision</h1>
         </div>
-        <nav className="nav-tabs">
-          <button 
-            className={currentView === "live" ? "active" : ""} 
+        <nav className="flex flex-wrap items-end gap-x-6 gap-y-2 sm:gap-x-8 pb-3">
+          <button
+            className={`pb-4 px-1 text-[15px] font-semibold transition-colors border-b-2 ${currentView === "live" ? "text-amber-600 border-amber-600" : "text-gray-500 hover:text-gray-900 border-transparent"}`}
             onClick={() => setCurrentView("live")}
           >
             Live Monitoring
           </button>
-          <button 
-            className={currentView === "playback" ? "active" : ""} 
+          <button
+            className={`pb-4 px-1 text-[15px] font-semibold transition-colors border-b-2 ${currentView === "playback" ? "text-amber-600 border-amber-600" : "text-gray-500 hover:text-gray-900 border-transparent"}`}
             onClick={() => setCurrentView("playback")}
           >
             Recorded Playback
           </button>
-          <button 
-            className={currentView === "evidence" ? "active" : ""} 
+          <button
+            className={`pb-4 px-1 text-[15px] font-semibold transition-colors border-b-2 ${currentView === "evidence" ? "text-amber-600 border-amber-600" : "text-gray-500 hover:text-gray-900 border-transparent"}`}
             onClick={() => setCurrentView("evidence")}
           >
             Evidence & History
           </button>
-          <button 
-            className={currentView === "report" ? "active" : ""} 
-            onClick={() => setCurrentView("report")}
-            style={{ backgroundColor: "#3b82f6", color: "white", fontWeight: "bold", marginLeft: "16px", borderRadius: "8px" }}
+          <button
+            className={`pb-4 px-1 text-[15px] font-semibold transition-colors border-b-2 ${currentView === "charts" ? "text-amber-600 border-amber-600" : "text-gray-500 hover:text-gray-900 border-transparent"}`}
+            onClick={() => setCurrentView("charts")}
           >
-            📝 Project Report
+            Report Chart
+          </button>
+          <button
+            className="px-4 py-2 mb-1 text-[15px] font-bold rounded-lg bg-amber-600 hover:bg-amber-700 text-white transition-colors border-none"
+            onClick={() => setCurrentView("report")}
+          >
+            Project Report
           </button>
         </nav>
       </header>
 
-      <main>
+      <main className="flex-1 p-8 bg-gray-50">
         <div style={{ display: currentView === "live" ? "block" : "none" }}>
           <LiveMonitoringView />
         </div>
@@ -504,8 +479,8 @@ export default function App() {
           <RecordedPlayback />
         </div>
         {currentView === "evidence" && <EvidenceHistoryView />}
-        
-        
+        {currentView === "charts" && <ReportCharts />}
+
         {currentView === "report" && <ProjectReport />}
       </main>
     </>
