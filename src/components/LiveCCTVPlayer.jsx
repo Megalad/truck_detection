@@ -442,8 +442,17 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
     const resizeObserver = new ResizeObserver(entries => {
       for (let entry of entries) {
         const { width, height } = entry.contentRect;
-        if (width > 0 && height > 0 && normalizedPointsState.length > 0) {
-          const absolutePoints = normalizedPoints.map(p => ({
+        const video = videoRef.current;
+        if (width > 0 && height > 0 && normalizedPointsState.length > 0 && video && video.videoWidth) {
+          // Same object-fit: cover transform as drawBoxes/handleFinishDrawing,
+          // recomputed against the CARD'S NEW size - this is what was missing:
+          // the polygon was staying at its old pixel coordinates whenever the
+          // card resized (e.g. changing how many cameras show in the grid).
+          const vw = video.videoWidth, vh = video.videoHeight;
+          const scale = Math.max(width / vw, height / vh);
+          const dw = vw * scale, dh = vh * scale;
+          const dx = (width - dw) / 2, dy = (height - dh) / 2;
+          const absolutePoints = normalizedPointsState.map(p => ({
             x: dx + p.x * dw,
             y: dy + p.y * dh
           }));

@@ -40,7 +40,19 @@ export default function CameraCharts({ cameraId }) {
 
   const byDay = useMemo(() => buildDaySeries(violations, 14), [violations]);
   const bySpeed = useMemo(() => buildSpeedBuckets(violations), [violations]);
-  const byHour = useMemo(() => buildHourCounts(violations), [violations]);
+  const todaysViolations = useMemo(() => {
+    const now = new Date();
+    return violations.filter((v) => {
+      const d = new Date(v.timestamp);
+      return (
+        !Number.isNaN(d.getTime()) &&
+        d.getFullYear() === now.getFullYear() &&
+        d.getMonth() === now.getMonth() &&
+        d.getDate() === now.getDate()
+      );
+    });
+  }, [violations]);
+  const byHour = useMemo(() => buildHourCounts(todaysViolations), [todaysViolations]);
 
   if (status === 'loading') {
     return <div className="text-gray-500 text-center py-10 text-sm">Loading charts…</div>;
@@ -78,11 +90,15 @@ export default function CameraCharts({ cameraId }) {
       <div className="sm:col-span-2">
         <ChartCard
           title="Violations by time of day"
-          subtitle="Confirmed violations by hour, local time"
+          subtitle="Confirmed violations by hour, today, local time"
           tableColumns={['Hour', 'Violations']}
           tableData={byHour.map((d) => [d.label, d.value])}
         >
-          <BarChart data={byHour} height={180} sparseLabels />
+          {violations.length > 0 && todaysViolations.length === 0 ? (
+            <div className="text-gray-500 text-center py-10 text-sm">No violations recorded yet today.</div>
+          ) : (
+            <BarChart data={byHour} height={180} sparseLabels />
+          )}
         </ChartCard>
       </div>
     </div>

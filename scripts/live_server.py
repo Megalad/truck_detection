@@ -63,7 +63,18 @@ public_dir = os.path.join(base_dir, "public", "calibration_results")
 os.makedirs(public_dir, exist_ok=True)
 app.mount("/calibration_results", StaticFiles(directory=public_dir), name="calibration_results")
 
-model_path = os.environ.get("MODEL_PATH",str(base_dir /"models/model_v4.pt"))
+# Serve evidence/recording media directly from the backend that writes it.
+# Vite's dev-server public-dir serving does NOT see files created in these
+# folders after its process starts (its watcher ignores them - see
+# vite.config.js - to stop reload-mid-fetch races, but that also drops them
+# from its own static-serving lookup for the rest of that dev session). This
+# backend always does a live disk read per request, so it never goes stale.
+for _subdir in ("evidence_snapshots", "evidence_videos", "recorded_videos"):
+    _dir = os.path.join(base_dir, "public", _subdir)
+    os.makedirs(_dir, exist_ok=True)
+    app.mount(f"/{_subdir}", StaticFiles(directory=_dir), name=_subdir)
+
+model_path = os.environ.get("MODEL_PATH",str(base_dir /"models/model_v6.pt"))
 print(f"Loading YOLO model from {model_path}...")
 model = ultralytics.YOLO(model_path)
 print("Model loaded successfully.")
@@ -305,6 +316,7 @@ async def process_recorded(req: ProcessRequest):
         violation_detected = False
         violating_bbox = None
         new_snapshot_url = ""
+        clean_frame = None  # snapshot of `frame` before any triangle is drawn on it this pass
         if result.boxes is not None:
                     # 🟢 Track ID များကို ယူပါမည်
                     track_ids = result.boxes.id.cpu().numpy() if result.boxes.id is not None else []
@@ -357,16 +369,15 @@ async def process_recorded(req: ProcessRequest):
                             box_label = "Truck" if speed_kmh is None else f"Truck({speed_kmh:.1f} km/h)"
 
                             if roi_poly is not None:
-                                # Check multiple points of the bounding box for more robust ROI intersection
-                                box_points = [
-                                    (int((x1_pix + x2_pix) / 2), int(y2_pix)), # bottom center
-                                    (int((x1_pix + x2_pix) / 2), int((y1_pix + y2_pix) / 2)), # center
-                                    (int(x1_pix), int(y2_pix)), # bottom left
-                                    (int(x2_pix), int(y2_pix)), # bottom right
-                                    (int(x1_pix), int(y1_pix)), # top left
-                                    (int(x2_pix), int(y1_pix))  # top right
-                                ]
-                                in_roi = any(cv2.pointPolygonTest(roi_poly, pt, False) >= 0 for pt in box_points)
+                                # Camera-specific geometry: trucks drive AWAY from this camera
+                                # and the restricted lane sits to their right. The bottom-right
+                                # corner (x2, y2) is the one point that actually tracks the
+                                # truck's right-side wheel - the ground-plane corner (unlike the
+                                # top corners, not distorted by the box's height-induced
+                                # perspective lean) and the leading edge when the truck drifts
+                                # right into the restricted lane.
+                                wheel_point = (int(x2_pix), int(y2_pix))
+                                in_roi = cv2.pointPolygonTest(roi_poly, wheel_point, False) >= 0
 
                                 if track_id != -1:
                                     roi_streak[track_id] = roi_streak[track_id] + 1 if in_roi else 0
@@ -384,10 +395,13 @@ async def process_recorded(req: ProcessRequest):
                                     violation_found = True  # flags the final DB insert below to run
                                     violating_bbox = (x1_pix, y1_pix, x2_pix, y2_pix)
                                     violating_speed_kmh = speed_kmh
+                                    if clean_frame is None:
+                                        clean_frame = frame.copy()
                                     # HUD-style violation marker: outline-only red box + floating
                                     # arrow + "VIOLATION" tag, all anchored above y1 so the truck
-                                    # itself stays fully visible in both the live feed and the
-                                    # evidence snapshot taken from this same frame below.
+                                    # itself stays fully visible in the live feed. Drawn on every
+                                    # confirmed truck this frame, so the live view can show more
+                                    # than one violator at once.
                                     violation_annotation.draw_violation_annotation(frame, x1_pix, y1_pix, x2_pix, y2_pix)
 
                                     current_time_chk = time.time()
@@ -398,9 +412,12 @@ async def process_recorded(req: ProcessRequest):
                                         snap_filename = f"V-{int(current_time_chk)}_{req.camera_id}_snap.jpg"
                                         snap_path = os.path.join(snapshot_dir, snap_filename)
 
-                                        # Dim everything except the violating truck so the
-                                        # evidence image points straight at the offender.
-                                        cv2.imwrite(snap_path, highlight_violation(frame, violating_bbox))
+                                        # Built from clean_frame (pre-annotation) so this evidence
+                                        # shot only marks THIS truck, even if other trucks elsewhere
+                                        # in frame are also confirmed violators right now.
+                                        evidence_frame = highlight_violation(clean_frame, violating_bbox)
+                                        violation_annotation.draw_violation_annotation(evidence_frame, x1_pix, y1_pix, x2_pix, y2_pix)
+                                        cv2.imwrite(snap_path, evidence_frame)
                                         new_snapshot_url = f"/evidence_snapshots/{snap_filename}"
                                         snapshot_url = new_snapshot_url  # carried into the final DB insert below
 
@@ -612,7 +629,8 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                 violation_detected = False
                 violating_bbox = None
                 new_snapshot_url = ""
-                
+                clean_frame = None  # snapshot of `frame` before any triangle is drawn on it this pass
+
                 # Setup polygon for point test if ROI is defined
                 roi_poly = None
                 if camera_rois.get(camera_id) and len(camera_rois[camera_id]) >= 3:
@@ -677,16 +695,15 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                             box_label = "Tracking..." if speed_kmh is None else f"{speed_kmh:.1f} km/h"
 
                             if roi_poly is not None:
-                                # Check multiple points of the bounding box for more robust ROI intersection
-                                box_points = [
-                                    (int((x1_pix + x2_pix) / 2), int(y2_pix)), # bottom center
-                                    (int((x1_pix + x2_pix) / 2), int((y1_pix + y2_pix) / 2)), # center
-                                    (int(x1_pix), int(y2_pix)), # bottom left
-                                    (int(x2_pix), int(y2_pix)), # bottom right
-                                    (int(x1_pix), int(y1_pix)), # top left
-                                    (int(x2_pix), int(y1_pix))  # top right
-                                ]
-                                in_roi = any(cv2.pointPolygonTest(roi_poly, pt, False) >= 0 for pt in box_points)
+                                # Camera-specific geometry: trucks drive AWAY from this camera
+                                # and the restricted lane sits to their right. The bottom-right
+                                # corner (x2, y2) is the one point that actually tracks the
+                                # truck's right-side wheel - the ground-plane corner (unlike the
+                                # top corners, not distorted by the box's height-induced
+                                # perspective lean) and the leading edge when the truck drifts
+                                # right into the restricted lane.
+                                wheel_point = (int(x2_pix), int(y2_pix))
+                                in_roi = cv2.pointPolygonTest(roi_poly, wheel_point, False) >= 0
 
                                 if track_id != -1:
                                     roi_streak[track_id] = roi_streak[track_id] + 1 if in_roi else 0
@@ -703,28 +720,18 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                                     violation_detected = True
                                     violating_bbox = (x1_pix, y1_pix, x2_pix, y2_pix)
                                     violating_speed_kmh = speed_kmh
+                                    if clean_frame is None:
+                                        clean_frame = frame.copy()
                                     # HUD-style violation marker: outline-only red box + floating
                                     # arrow + "VIOLATION" tag, all anchored above y1 so the truck
-                                    # itself stays fully visible in both the live feed and the
-                                    # evidence snapshot taken from this same frame below.
+                                    # itself stays fully visible in the live feed. Drawn on every
+                                    # confirmed truck this frame, so the live view can show more
+                                    # than one violator at once.
                                     violation_annotation.draw_violation_annotation(frame, x1_pix, y1_pix, x2_pix, y2_pix)
+                                    # Snapshot + Telegram happen once per recording, in the
+                                    # cooldown-gated "Start recording" block below - not here,
+                                    # since a lingering truck stays `confirmed` for many frames.
 
-                                    current_time_chk = time.time()
-                                    if track_id not in alerted_track_ids[camera_id] and not new_snapshot_url:
-                                        alerted_track_ids[camera_id].add(track_id)
-                                        snapshot_dir = os.path.join(base_dir, "public", "evidence_snapshots")
-                                        os.makedirs(snapshot_dir, exist_ok=True)
-                                        snap_filename = f"V-{int(current_time_chk)}_{camera_id}_snap.jpg"
-                                        snap_path = os.path.join(snapshot_dir, snap_filename)
-                                        
-                                        # Dim everything except the violating truck so the
-                                        # evidence image points straight at the offender.
-                                        cv2.imwrite(snap_path, highlight_violation(frame, violating_bbox))
-                                        new_snapshot_url = f"/evidence_snapshots/{snap_filename}"
-                                        
-                                        # 🟢 ဓာတ်ပုံသိမ်းပြီးသည်နှင့် Telegram သို့ လှမ်းပို့မည် (Speed အစစ်ပါသွားမည်)
-                                        threading.Thread(target=send_telegram_alert, args=(camera_id, speed_kmh, snap_path)).start()
-                            
                             boxes.append({
                                 "x1": float(coords[0]),
                                 "y1": float(coords[1]),
@@ -752,9 +759,25 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                     current_time = time.time()
                     if current_time - last_alert_times[camera_id] > COOLDOWN_SECONDS:
                         last_alert_times[camera_id] = current_time
-                        
+
                         violation_id = f"V-{int(current_time)}"
-                        
+
+                        # One evidence snapshot per recording, built from clean_frame
+                        # (captured before any triangle was drawn this pass) so it
+                        # only marks the truck that triggered THIS recording.
+                        snapshot_dir = os.path.join(base_dir, "public", "evidence_snapshots")
+                        os.makedirs(snapshot_dir, exist_ok=True)
+                        snap_filename = f"{violation_id}_{camera_id}_snap.jpg"
+                        snap_path = os.path.join(snapshot_dir, snap_filename)
+                        evidence_frame = highlight_violation(clean_frame, violating_bbox)
+                        vx1, vy1, vx2, vy2 = violating_bbox
+                        violation_annotation.draw_violation_annotation(evidence_frame, vx1, vy1, vx2, vy2)
+                        cv2.imwrite(snap_path, evidence_frame)
+                        new_snapshot_url = f"/evidence_snapshots/{snap_filename}"
+
+                        # 🟢 ဓာတ်ပုံသိမ်းပြီးသည်နှင့် Telegram သို့ လှမ်းပို့မည် (Speed အစစ်ပါသွားမည်)
+                        threading.Thread(target=send_telegram_alert, args=(camera_id, violating_speed_kmh, snap_path)).start()
+
                         # Start recording
                         active_recordings[camera_id] = {
                             'frames': list(frame_buffers[camera_id]),
@@ -766,7 +789,7 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                             'trigger_frame': frame.copy(),
                             'speed_kmh': violating_speed_kmh
                         }
-                        
+
                         alert_msg = {
                             "type": "VIOLATION_ALERT",
                             "camera": camera_id,

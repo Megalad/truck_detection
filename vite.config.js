@@ -27,6 +27,12 @@ export default defineConfig({
     },
     proxy: {
       "/api": "http://localhost:3001",
+      // Runtime-written media (see the `ignored` comment above for why these
+      // can't be trusted to Vite's own public-dir serving): proxied straight
+      // to the Python backend, which mounts and reads them live per request.
+      "/evidence_snapshots": "http://localhost:8000",
+      "/evidence_videos": "http://localhost:8000",
+      "/recorded_videos": "http://localhost:8000",
     },
   },
 });

@@ -184,14 +184,72 @@ export default function FrameOptimizationReport() {
         
       </div>
 
-      {/* Three simple problem -> fix rows */}
-      <div style={{ backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', overflow: 'hidden', marginBottom: '32px' }}>
-        <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-        </div>
-       
+      {/* =========================================
+          PART 4: WHERE THE CAMERA FEEDS COME FROM
+          ========================================= */}
+
+      {/* Visual Separator */}
+      <div style={{ margin: '64px 0', borderBottom: '2px dashed #e2e8f0' }}></div>
+
+      {/* Header */}
+      <div style={{ textAlign: 'center', paddingBottom: '24px', borderBottom: '1px solid #e2e8f0', marginBottom: '32px' }}>
+        <h1 style={{ fontSize: '32px', margin: 0, color: '#0f172a' }}>Streaming CCTV References</h1>
       </div>
 
+      <div style={{ backgroundColor: '#ffffff', padding: '24px', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+
+        {/* Camera types breakdown */}
+        <p style={{ margin: '0 0 16px 0', fontSize: '14px', color: '#475569', lineHeight: '1.6' }}>
+          We have <strong>112 CCTV</strong> cameras in total, covering three viewing angles:
+        </p>
+        <p> The resolution is 720p and 25 fps roughly</p>
+        <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginBottom: '16px' }}>
+          <div style={{ flex: '1 1 160px', backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '16px', textAlign: 'center' }}>
+            <img src="/report/left.png" alt="Left-facing CCTV example" style={{ width: '100%', height: 'auto', borderRadius: '6px', marginBottom: '10px' }} />
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#0f172a' }}>Left</span>
+          </div>
+          <div style={{ flex: '1 1 160px', backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '16px', textAlign: 'center' }}>
+            <img src="/report/center.png" alt="Center-facing CCTV example" style={{ width: '100%', height: 'auto', borderRadius: '6px', marginBottom: '10px' }} />
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#0f172a' }}>Center</span>
+          </div>
+          <div style={{ flex: '1 1 160px', backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '16px', textAlign: 'center' }}>
+            <img src="/report/right.png" alt="Right-facing CCTV example" style={{ width: '100%', height: 'auto', borderRadius: '6px', marginBottom: '10px' }} />
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#0f172a' }}>Right</span>
+          </div>
+        </div>
+        <p style={{ margin: '0 0 28px 0', fontSize: '13px', color: '#64748b' }}>
+          Current : <strong>Center</strong> ones &mdash; <strong className='text-warning'>15 cameras</strong>.
+        </p>
+
+        {/* Source logos */}
+        <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginBottom: '28px' }}>
+          <div style={{ flex: '1 1 200px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '12px', backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '20px' }}>
+            <img src="/logo/Unknown.jpeg" alt="M-Traffic logo" style={{ height: '44px', width: 'auto', objectFit: 'contain', borderRadius: '6px' }} />
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#0f172a', letterSpacing: '0.02em' }}>M-Traffic</span>
+          </div>
+
+          <div style={{ flex: '1 1 200px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '12px', backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '20px' }}>
+            <img src="/logo/itic-logo.png" alt="ITIC logo" style={{ height: '44px', width: 'auto', objectFit: 'contain' }} />
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#0f172a', letterSpacing: '0.02em' }}>ITIC</span>
+          </div>
+        </div>
+
+        {/* Example stream URL */}
+        <p style={{ margin: '0 0 8px 0', fontSize: '13px', color: '#64748b', fontWeight: 'bold' }}>
+          Example: camera TV03CL2 (M9-0+000-KL)
+        </p>
+        <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px 14px', overflowX: 'auto' }}>
+          <code style={{ fontFamily: 'monospace', fontSize: '13px', color: '#334155', whiteSpace: 'pre' }}>
+            http://1.4.213.19:1921/live/TV03CL2-M9-0_000-KL.stream/playlist.m3u8
+          </code>
+        </div>
+        <p style={{ margin: '12px 0 0 0', fontSize: '20px', color: '#64748b' }}>
+          User must use <span style={{ color: '#dc2626', fontWeight: 700 }}>VPN</span> with AU Wifi
+        </p>
+        
+      </div>
       
+
 
 
 

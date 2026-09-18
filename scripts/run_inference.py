@@ -1,4 +1,5 @@
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -8,7 +9,11 @@ import supervision as sv
 from ultralytics import YOLO
 
 
-LANE_POLYGON = np.array(
+# Frames are always resized to 1280x720 below before the zone check, so this
+# stays valid regardless of the source video's own resolution. It's still
+# tuned for one specific camera's lane position though - use --roi to check
+# an arbitrary uploaded clip against the lane the caller actually drew.
+DEFAULT_LANE_POLYGON = np.array(
     [
         [152, 242],
         [164, 245],
@@ -17,6 +22,29 @@ LANE_POLYGON = np.array(
     ],
     np.int32,
 )
+
+OUTPUT_W, OUTPUT_H = 1280, 720
+
+
+def build_lane_polygon(roi_json):
+    """Turns --roi (a JSON list of {x, y} points normalized 0-1, as drawn
+    against the video preview in the browser) into a pixel polygon in the
+    same OUTPUT_W x OUTPUT_H space every frame gets resized to. Falls back
+    to DEFAULT_LANE_POLYGON if --roi is missing or malformed, so this script
+    still works when called without one."""
+    if not roi_json:
+        return DEFAULT_LANE_POLYGON
+    try:
+        points = json.loads(roi_json)
+        if not isinstance(points, list) or len(points) < 3:
+            return DEFAULT_LANE_POLYGON
+        pixel_points = [
+            [round(p["x"] * OUTPUT_W), round(p["y"] * OUTPUT_H)]
+            for p in points
+        ]
+        return np.array(pixel_points, np.int32)
+    except (ValueError, KeyError, TypeError):
+        return DEFAULT_LANE_POLYGON
 
 
 def make_color(name):
@@ -39,7 +67,8 @@ def parse_args():
     parser.add_argument("--fps", type=float, default=30.0, help="Fallback output FPS.")
     parser.add_argument("--threshold-seconds", type=float, default=5.0)
     parser.add_argument("--conf", type=float, default=0.40)
-    parser.add_argument("--device", default="cpu", help="Use cpu, 0, 1, etc.")
+    parser.add_argument("--device", default="cpu", help="Use cpu, mps, 0, 1, etc.")
+    parser.add_argument("--roi", default=None, help="JSON list of {x,y} points, normalized 0-1.")
     return parser.parse_args()
 
 
@@ -58,7 +87,7 @@ def main():
 
     model = YOLO(str(model_path))
 
-    zone = sv.PolygonZone(polygon=LANE_POLYGON)
+    zone = sv.PolygonZone(polygon=build_lane_polygon(args.roi))
     zone_annotator = sv.PolygonZoneAnnotator(
         zone=zone,
         color=make_color("RED"),
@@ -83,7 +112,7 @@ def main():
     source_fps = cap.get(cv2.CAP_PROP_FPS)
     output_fps = source_fps if source_fps and source_fps > 1 else fallback_fps
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(str(output_path), fourcc, output_fps, (1280, 720))
+    out = cv2.VideoWriter(str(output_path), fourcc, output_fps, (OUTPUT_W, OUTPUT_H))
 
     frame_count = 0
     violation_frames = 0
@@ -96,7 +125,7 @@ def main():
                 break
 
             frame_count += 1
-            frame = cv2.resize(raw_frame, (1280, 720)).copy()
+            frame = cv2.resize(raw_frame, (OUTPUT_W, OUTPUT_H)).copy()
 
             results = model.track(
                 frame,

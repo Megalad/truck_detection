@@ -18,6 +18,7 @@ const pythonBin = fs.existsSync(localPythonPath) ? localPythonPath : "python3";
 const modelPaths = {
   model_1: path.join(__dirname, "models", "model_v1.pt"),
   model_2: path.join(__dirname, "models", "model_v2.pt"),
+  model_current: path.join(__dirname, "models", "model_v6.pt"),
 };
 
 fs.mkdirSync(uploadsPath, { recursive: true });
@@ -91,8 +92,9 @@ app.get("/api/violations", async (request, response) => {
 });
 
 app.post("/api/infer", upload.single("video"), (request, response) => {
-  const selectedModel = request.body.model || "model_2";
+  const selectedModel = request.body.model || "model_current";
   const modelPath = modelPaths[selectedModel];
+  const roi = typeof request.body.roi === "string" && request.body.roi.length > 0 ? request.body.roi : null;
 
   if (!modelPath || !fs.existsSync(modelPath)) {
     if (request.file?.path) fs.rmSync(request.file.path, { force: true });
@@ -127,7 +129,8 @@ app.post("/api/infer", upload.single("video"), (request, response) => {
     "--conf",
     selectedModel === "model_2" ? "0.40" : "0.35",
     "--device",
-    process.env.YOLO_DEVICE || "cpu",
+    process.env.YOLO_DEVICE || "mps",
+    ...(roi ? ["--roi", roi] : []),
   ]);
 
   let stdout = "";

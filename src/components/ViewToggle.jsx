@@ -9,7 +9,7 @@ const ViewToggle = ({ currentView, onViewChange }) => {
         className={`flex items-center justify-center p-2 rounded-full transition-colors ${
           currentView === 'focus' 
             ? 'bg-amber-600 text-white shadow-md' 
-            : 'text-gray-500 hover:text-gray-900 hover:bg-white'
+            : 'text-gray-500 hover:text-gray-900 hover:bg-whcamerasite'
         }`}
         title="Focus View"
       >

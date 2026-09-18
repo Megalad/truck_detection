@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { CAMERAS } from '../cameras';
 
 // All four charts are built from the same /api/violations records (the only
 // truck data this system persists — a detection only reaches the DB once it's
@@ -22,15 +23,18 @@ const HOUR_LABELS = [
   '12p', '1p', '2p', '3p', '4p', '5p', '6p', '7p', '8p', '9p', '10p', '11p',
 ];
 
+// Smallest "nice" number that's still >= value * 1.1 (10% headroom so the
+// tallest bar/point doesn't touch the top edge). The old version only had
+// four residual steps (1/2/5/10), which could nearly double the axis for a
+// value just over a step (e.g. 25 -> 50, half the chart empty); this denser
+// step list keeps the axis close to the actual data.
 function niceMax(value) {
   if (!Number.isFinite(value) || value <= 0) return 1;
-  const magnitude = Math.pow(10, Math.floor(Math.log10(value)));
-  const residual = value / magnitude;
-  let niceResidual;
-  if (residual <= 1) niceResidual = 1;
-  else if (residual <= 2) niceResidual = 2;
-  else if (residual <= 5) niceResidual = 5;
-  else niceResidual = 10;
+  const target = value * 1.1;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(target)));
+  const residual = target / magnitude;
+  const steps = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
+  const niceResidual = steps.find((s) => s >= residual) ?? 10;
   return niceResidual * magnitude;
 }
 
@@ -86,7 +90,10 @@ export function buildDaySeries(violations, days) {
 }
 
 export function buildSpeedBuckets(violations) {
-  const bucketSize = 10;
+  // 20 km/h bins, not 10 - halves how many bars/labels the chart needs
+  // (e.g. 0-140 km/h is 7 labels instead of 14), which is what was making
+  // the x-axis labels overlap into an unreadable strip.
+  const bucketSize = 20;
   const speeds = violations
     .map((v) => Number(v.speed_kmh))
     .filter((v) => Number.isFinite(v) && v >= 0);
@@ -106,26 +113,28 @@ export function buildSpeedBuckets(violations) {
   });
 }
 
-// Real deployments accumulate more distinct camera_location values than fit
-// legibly on one axis (this DB already has 13, some of them leftover test
-// entries like "camera1"/"recorded1"). Past ~7 categories the dataviz form
-// guide calls for folding the tail into "Other" rather than cramming every
-// label in — so the chart stays readable and still accounts for the total.
-const MAX_LANE_BARS = 7;
-
+// Always shows all 15 currently-monitored cameras (see src/cameras.js — the
+// same list Live Monitoring renders), even ones with zero violations so far,
+// instead of only whichever camera_location values happen to already be in
+// the DB. Older/test entries that predate the current camera list (e.g.
+// "camera1"/"recorded1") still get counted, just folded into one "Other"
+// bar at the end rather than cluttering the axis with stale IDs.
 function buildLaneCounts(violations) {
   const counts = new Map();
   for (const v of violations) {
     const key = v.camera_location || 'Unknown';
     counts.set(key, (counts.get(key) || 0) + 1);
   }
-  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-  const head = sorted.slice(0, MAX_LANE_BARS).map(([label, value]) => ({ label, value }));
-  const tail = sorted.slice(MAX_LANE_BARS);
-  if (tail.length > 0) {
-    head.push({ label: `Other (${tail.length})`, value: tail.reduce((sum, [, v]) => sum + v, 0) });
-  }
-  return head;
+
+  const currentIds = new Set(CAMERAS.map((c) => c.id));
+  const current = CAMERAS.map((c) => ({ label: c.id, value: counts.get(c.id) || 0 }))
+    .sort((a, b) => b.value - a.value);
+
+  const legacyTotal = [...counts.entries()]
+    .filter(([key]) => !currentIds.has(key))
+    .reduce((sum, [, v]) => sum + v, 0);
+
+  return legacyTotal > 0 ? [...current, { label: 'Other (legacy)', value: legacyTotal }] : current;
 }
 
 export function buildHourCounts(violations) {
@@ -435,16 +444,16 @@ export default function ReportCharts() {
           tableData={bySpeed.map((d) => [d.label, d.value])}
         >
           <SpeedLegend />
-          <BarChart data={bySpeed} />
+          <BarChart data={bySpeed} sparseLabels />
         </ChartCard>
 
         <ChartCard
           title="Truck Count by Lane"
-          subtitle="Violations per monitored camera / lane"
+          subtitle="Violations per monitored camera / lane (all 15 active cameras)"
           tableColumns={['Camera / lane', 'Count']}
           tableData={byLane.map((d) => [d.label, d.value])}
         >
-          <BarChart data={byLane} />
+          <BarChart data={byLane} sparseLabels />
         </ChartCard>
 
         <ChartCard

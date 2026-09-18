@@ -14,6 +14,17 @@ export default function UploadPlayback() {
   const [errorMsg, setErrorMsg] = useState('');
   const inputRef = useRef(null);
 
+  // Optional ROI: without one, run_inference.py checks a hardcoded lane zone
+  // tuned for one specific camera, which lands in the wrong place on an
+  // arbitrary uploaded clip. Points are captured in on-screen CSS pixels of
+  // videoBoxRef, then normalized (0-1) against the video's own native frame
+  // at process time - same idea as the live ROI drawer, but against a static
+  // preview instead of a live stream.
+  const [roiPoints, setRoiPoints] = useState([]);
+  const [isDrawingRoi, setIsDrawingRoi] = useState(false);
+  const videoBoxRef = useRef(null);
+  const previewVideoRef = useRef(null);
+
   const handleFileChange = (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
@@ -27,6 +38,33 @@ export default function UploadPlayback() {
     setResultUrl(null);
     setStatus('idle');
     setErrorMsg('');
+    setRoiPoints([]);
+    setIsDrawingRoi(false);
+  };
+
+  const handleRoiClick = (e) => {
+    if (!isDrawingRoi) return;
+    const rect = videoBoxRef.current.getBoundingClientRect();
+    setRoiPoints((pts) => [...pts, { x: e.clientX - rect.left, y: e.clientY - rect.top }]);
+  };
+
+  // object-fit: contain -> scaled by the SMALLER ratio, centered/letterboxed
+  // (the preview video uses "contain", not "cover" like the live players, so
+  // this is a different transform from LiveCCTVPlayer's).
+  const normalizedRoiPoints = () => {
+    const video = previewVideoRef.current;
+    const box = videoBoxRef.current;
+    if (!video || !box || roiPoints.length < 3 || !video.videoWidth) return null;
+    const rect = box.getBoundingClientRect();
+    const scale = Math.min(rect.width / video.videoWidth, rect.height / video.videoHeight);
+    const dw = video.videoWidth * scale;
+    const dh = video.videoHeight * scale;
+    const dx = (rect.width - dw) / 2;
+    const dy = (rect.height - dh) / 2;
+    return roiPoints.map((p) => ({
+      x: Math.min(1, Math.max(0, (p.x - dx) / dw)),
+      y: Math.min(1, Math.max(0, (p.y - dy) / dh)),
+    }));
   };
 
   const handleProcess = async () => {
@@ -36,7 +74,9 @@ export default function UploadPlayback() {
 
     const formData = new FormData();
     formData.append('video', file);
-    formData.append('model', 'model_2');
+    formData.append('model', 'model_current');
+    const roi = normalizedRoiPoints();
+    if (roi) formData.append('roi', JSON.stringify(roi));
 
     try {
       const res = await fetch('/api/infer', { method: 'POST', body: formData });
@@ -58,8 +98,12 @@ export default function UploadPlayback() {
     setResultUrl(null);
     setStatus('idle');
     setErrorMsg('');
+    setRoiPoints([]);
+    setIsDrawingRoi(false);
     if (inputRef.current) inputRef.current.value = '';
   };
+
+  const showRoiTools = previewUrl && !resultUrl;
 
   return (
     <div className="flex flex-col bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-2xl relative max-w-7xl mx-auto mb-10">
@@ -76,15 +120,35 @@ export default function UploadPlayback() {
       </div>
 
       {/* Video Container (16:9 Hero) - same treatment as Focus mode's player */}
-      <div className="relative w-full bg-black aspect-video flex items-center justify-center">
+      <div ref={videoBoxRef} className="relative w-full bg-black aspect-video flex items-center justify-center">
         {resultUrl ? (
           <video src={resultUrl} controls autoPlay loop playsInline className="w-full h-full object-contain" />
         ) : previewUrl ? (
-          <video src={previewUrl} controls playsInline className="w-full h-full object-contain" />
+          <video ref={previewVideoRef} src={previewUrl} controls={!isDrawingRoi} playsInline className="w-full h-full object-contain" />
         ) : (
           <div className="text-gray-500 text-sm text-center px-6">
             Choose a video below to preview it here.
           </div>
+        )}
+
+        {showRoiTools && (
+          <svg
+            className="absolute inset-0 w-full h-full"
+            style={{ cursor: isDrawingRoi ? 'crosshair' : 'default', pointerEvents: isDrawingRoi ? 'auto' : 'none' }}
+            onClick={handleRoiClick}
+          >
+            {roiPoints.length >= 2 && (
+              <polygon
+                points={roiPoints.map((p) => `${p.x},${p.y}`).join(' ')}
+                fill="rgba(239,68,68,0.25)"
+                stroke="#ef4444"
+                strokeWidth="2"
+              />
+            )}
+            {roiPoints.map((p, i) => (
+              <circle key={i} cx={p.x} cy={p.y} r="5" fill="#ef4444" />
+            ))}
+          </svg>
         )}
 
         {status === 'uploading' && (
@@ -110,6 +174,32 @@ export default function UploadPlayback() {
           </span>
         )}
       </div>
+
+      {showRoiTools && (
+        <div className="px-6 py-3 flex flex-wrap items-center gap-3 bg-gray-50 border-b border-gray-200">
+          <button
+            onClick={() => setIsDrawingRoi((d) => !d)}
+            className={`text-sm font-medium rounded-md px-3 py-1.5 border transition-colors ${
+              isDrawingRoi
+                ? 'bg-amber-600 text-white border-amber-600'
+                : 'text-gray-600 border-gray-300 hover:border-amber-300 hover:text-amber-600'
+            }`}
+          >
+            {isDrawingRoi ? 'Click the video to add points…' : roiPoints.length > 0 ? 'Keep drawing ROI' : 'Draw ROI (optional)'}
+          </button>
+          {roiPoints.length > 0 && (
+            <button
+              onClick={() => setRoiPoints([])}
+              className="text-sm font-medium text-gray-500 hover:text-red-600 border border-gray-300 hover:border-red-300 rounded-md px-3 py-1.5 transition-colors"
+            >
+              Clear ROI ({roiPoints.length} point{roiPoints.length !== 1 ? 's' : ''})
+            </button>
+          )}
+          <p className="text-gray-500 text-xs">
+            Mark the restricted lane with 3+ points before processing. Skip this and it falls back to a generic zone that may not match your footage.
+          </p>
+        </div>
+      )}
 
       <div className="px-6 py-5 flex flex-col sm:flex-row sm:items-center gap-4">
         <div className="flex-1">

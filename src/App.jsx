@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import "./styles.css";
+import { CAMERAS } from "./cameras";
 import LiveCCTVPlayer from "./components/LiveCCTVPlayer";
 import CameraNetworkMap from "./components/CameraNetworkMap";
 import RecordedPlayback from "./components/RecordedPlayback";
@@ -74,27 +75,11 @@ const VideoCard = ({ cam, idx, setActiveCameraIndex, setCurrentView, handleViola
 };
 
 function LiveMonitoringView() {
-  // Stream URLs pulled verbatim from camera.json (the org's master CCTV list) —
-  // same host/port pattern as the three cameras already here, just more of them.
-  const CAMERAS = [
-    { id: "TV27CL1", title: "TV27CL1 M9-21+900-TY", url: "http://1.4.213.19:1922/live/TV27CL1-M9-21_900-TY.stream/playlist.m3u8" },
-    { id: "TV03CL2", title: "TV03CL2 M9-0+000-KL", url: "http://1.4.213.19:1921/live/TV03CL2-M9-0_000-KL.stream/playlist.m3u8" },
-    { id: "TV28CL2", title: "TV28CL2 M9-21+900-TY", url: "http://1.4.213.19:1922/live/TV28CL2-M9-21_900-TY.stream/playlist.m3u8" },
-    { id: "TV55CL2", title: "TV55CL2 M9-43+000-RIT", url: "http://1.4.213.19:1923/live/TV55CL2-M9-43_000-RIT.stream/playlist.m3u8" },
-    { id: "TV64CL1", title: "TV64CL1 M9-47+926-RIT", url: "http://1.4.213.19:1924/live/TV64CL1-M9-47_926-RIT.stream/playlist.m3u8" },
-    { id: "TV73CL1", title: "TV73CL1 M9-54+000-TC", url: "http://1.4.213.19:1924/live/TV73CL1-M9-54_000-TC.stream/playlist.m3u8" },
-    { id: "TV76CL2", title: "TV76CL2 M9-55+250-ON", url: "http://1.4.213.19:1925/live/TV76CL2-M9-55_250-ON.stream/playlist.m3u8" },
-    { id: "TV16CL1", title: "TV16CL1 M7-11+350-RK", url: "http://1.4.213.19:1926/live/TV16CL1-M7-11_350-RK.stream/playlist.m3u8" },
-    { id: "TV18CL", title: "TV18CL M7-12+000-LKB", url: "http://1.4.213.19:1926/live/TV18CL-M7-12_000-LKB.stream/playlist.m3u8" },
-    { id: "TV20CL", title: "TV20CL M7-13+400-KSR", url: "http://1.4.213.19:1926/live/TV20CL-M7-13_400-KSR.stream/playlist.m3u8" },
-    { id: "TV27CL2", title: "TV27CL2 M7-20+790-LKB", url: "http://1.4.213.19:1926/live/TV27CL2-M7-20_790-LKB.stream/playlist.m3u8" },
-    { id: "TV11L", title: "TV11L M7-1+250-BP", url: "http://1.4.213.19:1932/live/TV11L-M7-0_050-BP.stream/playlist.m3u8" },
-    { id: "TV13CL1", title: "TV13CL1 M7-78+780-BP", url: "http://1.4.213.19:1930/live/TV13CL1-M7-78_780-BP.stream/playlist.m3u8" },
-    { id: "TV67R", title: "TV67R M7-78+850-BP", url: "http://1.4.213.19:1930/live/TV67R-M7-78_850-BP.stream/playlist.m3u8" },
-    { id: "TV35CL2", title: "TV35CL2 M7-99+430-NK", url: "http://1.4.213.19:1931/live/TV35CL2-M7-99_430-NK.stream/playlist.m3u8" },
-  ];
+  const MIN_GRID_CAMERAS = 2;
+  const MAX_GRID_CAMERAS = CAMERAS.length;
 
   const [currentView, setCurrentView] = useState("grid");
+  const [visibleCameraCount, setVisibleCameraCount] = useState(MIN_GRID_CAMERAS);
   const [activeCameraIndex, setActiveCameraIndex] = useState(0);
   const [latestAlert, setLatestAlert] = useState(null);
 
@@ -120,12 +105,37 @@ function LiveMonitoringView() {
     <section>
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-xl font-bold text-gray-900">Live Camera Feeds</h2>
-        <ViewToggle currentView={currentView} onViewChange={setCurrentView} />
+        <div className="flex items-center gap-3">
+          {currentView === 'grid' && (
+            <div className="flex items-center gap-2 bg-gray-100 rounded-full p-1 border border-gray-200 shadow-inner">
+              <button
+                onClick={() => setVisibleCameraCount((c) => Math.max(MIN_GRID_CAMERAS, c - 1))}
+                disabled={visibleCameraCount <= MIN_GRID_CAMERAS}
+                className="w-8 h-8 flex items-center justify-center rounded-full text-gray-600 hover:bg-white hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                title="Show fewer cameras"
+              >
+                &minus;
+              </button>
+              <span className="text-sm font-semibold text-gray-700 w-20 text-center">
+                {visibleCameraCount} camera{visibleCameraCount !== 1 ? "s" : ""}
+              </span>
+              <button
+                onClick={() => setVisibleCameraCount((c) => Math.min(MAX_GRID_CAMERAS, c + 1))}
+                disabled={visibleCameraCount >= MAX_GRID_CAMERAS}
+                className="w-8 h-8 flex items-center justify-center rounded-full text-gray-600 hover:bg-white hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                title="Show more cameras"
+              >
+                +
+              </button>
+            </div>
+          )}
+          <ViewToggle currentView={currentView} onViewChange={setCurrentView} />
+        </div>
       </div>
 
       {currentView === 'grid' ? (
         <div className="live-grid">
-          {CAMERAS.map((cam, idx) => (
+          {CAMERAS.slice(0, visibleCameraCount).map((cam, idx) => (
             <VideoCard
               key={cam.id}
               cam={cam}
