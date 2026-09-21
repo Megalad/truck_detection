@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
+import { demoClipExists, demoClipUrl, useReplayMode } from '../replay';
 
 const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
   // Live <video> plays at full rate; a transparent canvas on top redraws
@@ -11,6 +12,19 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
   // what fills in smooth motion between detections (which arrive slower than
   // the screen refreshes); without it the box would only move once per
   // WebSocket response.
+
+  // Replay ("Plan B"): play public/demo/<cameraId>.mp4 instead of the CCTV stream, either because
+  // the operator switched to Replay or because the stream is down (autoReplay). Only possible
+  // when that clip exists; otherwise the camera keeps trying its live stream.
+  const forcedReplay = useReplayMode();
+  const [autoReplay, setAutoReplay] = useState(false);
+  const [clipOk, setClipOk] = useState(null); // null = not checked yet
+  useEffect(() => {
+    let cancelled = false;
+    demoClipExists(cameraId).then((ok) => { if (!cancelled) setClipOk(ok); });
+    return () => { cancelled = true; };
+  }, [cameraId]);
+  const replay = (forcedReplay || autoReplay) && clipOk === true;
 
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -68,8 +82,27 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
     let hls;
     const video = videoRef.current;
 
-    // 1. Initialize HLS Video Stream
-    if (video && streamUrl) {
+    // 1. Initialize the video source: a local recording (replay) or the HLS stream
+    let watchdog;
+    if (video && replay) {
+      video.src = demoClipUrl(cameraId);
+      video.loop = true;
+      video.muted = true;
+      video.play().catch(() => {});
+    } else if (video && streamUrl) {
+      // If the stream never starts, or freezes for ~15s, fall back to the recording (when there is one).
+      let started = false;
+      let lastTime = -1;
+      let stalledChecks = 0;
+      const startTimer = setTimeout(() => { if (!started) setAutoReplay(true); }, 10000);
+      watchdog = setInterval(() => {
+        if (!started) return;
+        if (video.currentTime === lastTime) stalledChecks += 1; else { stalledChecks = 0; lastTime = video.currentTime; }
+        if (stalledChecks >= 3) setAutoReplay(true);
+      }, 5000);
+      video.addEventListener('playing', () => { started = true; clearTimeout(startTimer); }, { once: true });
+      const stopTimers = () => { clearTimeout(startTimer); clearInterval(watchdog); };
+      video.__stopReplayWatch = stopTimers;
       if (Hls.isSupported()) {
         const optimizedHlsConfig = {
           enableWorker: true,
@@ -257,10 +290,12 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
     // Cleanup
     return () => {
       isConnected = false;
+      if (video && video.__stopReplayWatch) { video.__stopReplayWatch(); video.__stopReplayWatch = null; }
       if (hls) hls.destroy();
+      if (video && replay) { video.removeAttribute('src'); video.load(); }
       if (wsRef.current) wsRef.current.close();
     };
-  }, [streamUrl, cameraId]);
+  }, [streamUrl, cameraId, replay]);
 
   // Draw the given boxes onto the overlay canvas, mapping normalized
   // (full-frame) coords through the same object-fit: cover crop the <video>
@@ -637,8 +672,8 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
 
       {/* Live Indicator */}
       <div className="live-badge" style={{ position: 'absolute', bottom: '12px', left: '12px', zIndex: 10 }}>
-        <span className="dot"></span>
-        <span style={{ color: 'white', textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}>LIVE</span>
+        <span className="dot" style={replay ? { backgroundColor: '#f59e0b', animation: 'none' } : undefined}></span>
+        <span style={{ color: 'white', textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}>{replay ? 'REPLAY' : 'LIVE'}</span>
       </div>
 
       {/* Calibration Overlay */}

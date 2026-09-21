@@ -19,6 +19,7 @@ public/report/*.mp4
 
 # Large media / training artifacts - distribute outside git
 public/recorded_videos/
+public/demo/
 public/model1/
 public/model2/
 
@@ -30,3 +31,6 @@ Ultralytics/
 
 # Misplaced large binary, not source
 Senior Project Posters 1-2025.pdf
+
+# runtime state written by live_server.py
+scripts/speed_limit.json

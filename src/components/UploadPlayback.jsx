@@ -10,6 +10,8 @@ export default function UploadPlayback() {
   const [file, setFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [resultUrl, setResultUrl] = useState(null);
+  const [evidence, setEvidence] = useState([]); // violation snapshots found in this clip (not saved to the Evidence page)
+  const [roiUsed, setRoiUsed] = useState(false);
   const [status, setStatus] = useState('idle'); // idle | uploading | done | error
   const [errorMsg, setErrorMsg] = useState('');
   const inputRef = useRef(null);
@@ -36,6 +38,7 @@ export default function UploadPlayback() {
     setFile(f);
     setPreviewUrl(URL.createObjectURL(f));
     setResultUrl(null);
+    setEvidence([]);
     setStatus('idle');
     setErrorMsg('');
     setRoiPoints([]);
@@ -71,20 +74,28 @@ export default function UploadPlayback() {
     if (!file) return;
     setStatus('uploading');
     setErrorMsg('');
+    setEvidence([]);
 
-    const formData = new FormData();
-    formData.append('video', file);
-    formData.append('model', 'model_current');
+    // Same pipeline as live monitoring / recorded playback (live_server.py), so the clip is
+    // judged by the same rules and drawn the same way. The MP4 goes as the raw request body.
     const roi = normalizedRoiPoints();
-    if (roi) formData.append('roi', JSON.stringify(roi));
+    const apiHost = window.location.hostname === 'localhost' ? 'http://localhost:8000' : '';
+    const query = new URLSearchParams({ camera_id: 'UPLOAD' });
+    if (roi) query.set('roi', JSON.stringify(roi));
 
     try {
-      const res = await fetch('/api/infer', { method: 'POST', body: formData });
+      const res = await fetch(`${apiHost}/api/process_upload?${query}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'video/mp4' },
+        body: file,
+      });
       const data = await res.json().catch(() => null);
-      if (!res.ok || !data?.ok) {
-        throw new Error(data?.error || `Processing failed (HTTP ${res.status}).`);
+      if (!res.ok || data?.status !== 'success') {
+        throw new Error(data?.detail || `Processing failed (HTTP ${res.status}).`);
       }
-      setResultUrl(`${data.outputUrl}?t=${Date.now()}`);
+      setResultUrl(`${apiHost}${data.processed_url}?t=${Date.now()}`);
+      setEvidence((data.evidence || []).map((e) => ({ ...e, url: `${apiHost}${e.url}` })));
+      setRoiUsed(Boolean(roi));
       setStatus('done');
     } catch (err) {
       setErrorMsg(err.message || 'Processing failed.');
@@ -96,6 +107,7 @@ export default function UploadPlayback() {
     setFile(null);
     setPreviewUrl(null);
     setResultUrl(null);
+    setEvidence([]);
     setStatus('idle');
     setErrorMsg('');
     setRoiPoints([]);
@@ -175,6 +187,38 @@ export default function UploadPlayback() {
         )}
       </div>
 
+      {status === 'done' && (
+        <div className="px-6 py-5 border-b border-gray-200 bg-gray-50">
+          <h3 className="text-gray-900 text-base font-bold mb-1">
+            Evidence from this clip ({evidence.length})
+          </h3>
+          <p className="text-gray-500 text-xs mb-4">
+            One image per violating truck. These are only shown here - they are not added to Evidence &amp; History.
+          </p>
+          {evidence.length === 0 ? (
+            <p className="text-gray-500 text-sm">
+              {roiUsed ? 'No violations were found in this clip.' : 'No ROI was drawn, so no violations could be checked. Upload again and draw the restricted lane first.'}
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {evidence.map((e) => {
+                const t = Math.floor(e.time_sec);
+                const clock = `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+                return (
+                  <a key={e.url} href={e.url} target="_blank" rel="noreferrer" className="block bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+                    <img src={e.url} alt={`Evidence for truck ${e.track_id}`} className="w-full aspect-video object-cover bg-gray-100" />
+                    <div className="px-4 py-3 text-sm text-gray-700 flex justify-between">
+                      <span className="font-semibold">Truck #{e.track_id}</span>
+                      <span>{clock} · {e.speed_kmh == null ? '—' : `${e.speed_kmh.toFixed(1)} km/h`}</span>
+                    </div>
+                  </a>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {showRoiTools && (
         <div className="px-6 py-3 flex flex-wrap items-center gap-3 bg-gray-50 border-b border-gray-200">
           <button
@@ -196,7 +240,7 @@ export default function UploadPlayback() {
             </button>
           )}
           <p className="text-gray-500 text-xs">
-            Mark the restricted lane with 3+ points before processing. Skip this and it falls back to a generic zone that may not match your footage.
+            Mark the restricted lane with 3+ points before processing. Without one the clip is only annotated - no violations are checked.
           </p>
         </div>
       )}

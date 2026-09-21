@@ -6,6 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import supervision as sv
+from device_util import pick_device
 from ultralytics import YOLO
 
 
@@ -66,8 +67,8 @@ def parse_args():
     parser.add_argument("--output", required=True, help="Output MP4 path.")
     parser.add_argument("--fps", type=float, default=30.0, help="Fallback output FPS.")
     parser.add_argument("--threshold-seconds", type=float, default=5.0)
-    parser.add_argument("--conf", type=float, default=0.40)
-    parser.add_argument("--device", default="cpu", help="Use cpu, mps, 0, 1, etc.")
+    parser.add_argument("--conf", type=float, default=0.5)
+    parser.add_argument("--device", default="auto", help="auto (cuda > mps > cpu), or cpu, mps, cuda:0, ...")
     parser.add_argument("--roi", default=None, help="JSON list of {x,y} points, normalized 0-1.")
     return parser.parse_args()
 
@@ -111,8 +112,15 @@ def main():
 
     source_fps = cap.get(cv2.CAP_PROP_FPS)
     output_fps = source_fps if source_fps and source_fps > 1 else fallback_fps
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(str(output_path), fourcc, output_fps, (OUTPUT_W, OUTPUT_H))
+    # Browsers can't decode MPEG-4 Part 2 ("mp4v") inside an MP4 - the player
+    # shows a black frame at 0:00 - so write H.264 ("avc1"). If this OpenCV
+    # build has no avc1 encoder, fall back to mp4v and transcode with ffmpeg
+    # once writing is finished (see below).
+    out = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*"avc1"), output_fps, (OUTPUT_W, OUTPUT_H))
+    needs_transcode = False
+    if not out.isOpened():
+        out = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), output_fps, (OUTPUT_W, OUTPUT_H))
+        needs_transcode = True
 
     frame_count = 0
     violation_frames = 0
@@ -131,7 +139,7 @@ def main():
                 frame,
                 conf=args.conf,
                 persist=True,
-                device=args.device,
+                device=pick_device(args.device),
                 verbose=False,
             )[0]
 
@@ -182,6 +190,23 @@ def main():
     finally:
         cap.release()
         out.release()
+
+    if needs_transcode:
+        import os, shutil, subprocess
+        ffmpeg = shutil.which("ffmpeg")
+        tmp_path = str(output_path) + ".h264.mp4"
+        if ffmpeg:
+            result = subprocess.run(
+                [ffmpeg, "-y", "-loglevel", "error", "-i", str(output_path),
+                 "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", tmp_path],
+                capture_output=True, text=True,
+            )
+            if result.returncode == 0:
+                os.replace(tmp_path, str(output_path))
+            else:
+                print(f"ffmpeg transcode failed: {result.stderr}", file=sys.stderr, flush=True)
+        else:
+            print("WARNING: no avc1 encoder and no ffmpeg; output may not play in browsers.", file=sys.stderr, flush=True)
 
     print(
         f"Inference complete. Frames={frame_count}; violation_frames={violation_frames}; output={output_path}",

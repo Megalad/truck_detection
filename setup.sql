@@ -7,7 +7,5 @@ CREATE TABLE IF NOT EXISTS violations (
     timestamp DATETIME NOT NULL,
     camera_location VARCHAR(255) NOT NULL,
     roi_polygon JSON NOT NULL,
-    evidence_video_url VARCHAR(255) NOT NULL,
-    video_name VARCHAR(255) NOT NULL,
     evidence_snapshot_url VARCHAR(255)
 );

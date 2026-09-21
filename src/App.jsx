@@ -8,6 +8,8 @@ import ProjectReport from "./components/ProjectReport";
 import ReportCharts from "./components/ReportCharts";
 import ViewToggle from "./components/ViewToggle";
 import FocusView from "./components/FocusView";
+import SpeedLimitControl from "./components/SpeedLimitControl";
+import ReplayToggle from "./components/ReplayToggle";
 
 const VideoCard = ({ cam, idx, setActiveCameraIndex, setCurrentView, handleViolationAlert }) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -106,6 +108,8 @@ function LiveMonitoringView() {
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-xl font-bold text-gray-900">Live Camera Feeds</h2>
         <div className="flex items-center gap-3">
+          <ReplayToggle />
+          <SpeedLimitControl />
           {currentView === 'grid' && (
             <div className="flex items-center gap-2 bg-gray-100 rounded-full p-1 border border-gray-200 shadow-inner">
               <button

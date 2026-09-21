@@ -7,3 +7,4 @@ fastapi
 uvicorn[standard]
 mysql-connector-python
 python-dotenv
+onnxruntime  # vehicle re-ID model (scripts/reid_engine.py); use onnxruntime-gpu on the GPU image

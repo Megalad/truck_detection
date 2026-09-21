@@ -21,7 +21,6 @@ export default defineConfig({
         "**/outputs/**",
         "**/public/calibration_results/**",
         "**/public/evidence_snapshots/**",
-        "**/public/evidence_videos/**",
         "**/public/recorded_videos/**",
       ],
     },
@@ -31,7 +30,6 @@ export default defineConfig({
       // can't be trusted to Vite's own public-dir serving): proxied straight
       // to the Python backend, which mounts and reads them live per request.
       "/evidence_snapshots": "http://localhost:8000",
-      "/evidence_videos": "http://localhost:8000",
       "/recorded_videos": "http://localhost:8000",
     },
   },

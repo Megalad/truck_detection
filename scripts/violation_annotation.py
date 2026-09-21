@@ -24,7 +24,7 @@ _ICON_PATH = os.path.join(
 _pointer_icon_cache = None  # lazily loaded: cropped-to-content, apex-down BGRA, or False if unusable
 
 
-def draw_violation_annotation(frame, x1, y1, x2, y2, box_color=(0, 0, 255)):
+def draw_violation_annotation(frame, x1, y1, x2, y2, box_color=(0, 0, 255), scale=1.0):
     """Draws a floating pointer above one detected truck, marking it as a
     violation without drawing anything over the truck itself.
 
@@ -33,6 +33,8 @@ def draw_violation_annotation(frame, x1, y1, x2, y2, box_color=(0, 0, 255)):
         x1, y1, x2, y2: box corners in pixel coordinates.
         box_color: fallback pointer color, used only if the icon asset can't
             be loaded (see `_draw_fallback_triangle`).
+        scale: multiplies the marker's pixel sizes, for frames that were
+            upscaled from the 640-px-wide inference frame.
 
     Returns:
         The same frame object, for chaining.
@@ -43,12 +45,15 @@ def draw_violation_annotation(frame, x1, y1, x2, y2, box_color=(0, 0, 255)):
     # truck's top-center, sitting entirely above y1.
     box_center_x = (x1 + x2) // 2
 
-    TRIANGLE_WIDTH = 40  # target on-screen width of the pointer icon, in px
-    TRIANGLE_GAP = 8     # gap between the icon's apex tip and the box's top edge
+    TRIANGLE_WIDTH = max(1, round(12 * scale))  # target on-screen width of the pointer icon, in px
+    TRIANGLE_GAP = max(1, round(4 * scale))    # gap between the icon's apex tip and the box's top edge
+    TRIANGLE_OPACITY = 1.0  # triangle itself: 0.0 (invisible) to 1.0 (fully solid)
+    BG_GLOW_OPACITY = 1   # soft red glow behind the triangle: 0.0 (none) to 1.0 (strong)
 
-    apex_y = min(y1 - TRIANGLE_GAP, y1 - 2)  # apex must stay strictly above the box
+    apex_y = min(y1 - TRIANGLE_GAP, y1 - max(1, round(2 * scale)))  # apex must stay strictly above the box
 
-    if not _draw_pointer_icon(frame, apex=(box_center_x, apex_y), target_width=TRIANGLE_WIDTH):
+    if not _draw_pointer_icon(frame, apex=(box_center_x, apex_y), target_width=TRIANGLE_WIDTH,
+                          opacity=TRIANGLE_OPACITY, glow_opacity=BG_GLOW_OPACITY):
         # Fallback if the icon asset is missing/unreadable, so a violation
         # frame is never silently drawn without any pointer at all.
         _draw_fallback_triangle(frame, apex=(box_center_x, apex_y), color=box_color)
@@ -80,7 +85,7 @@ def _load_pointer_icon():
     return icon
 
 
-def _draw_pointer_icon(frame, apex, target_width):
+def _draw_pointer_icon(frame, apex, target_width, opacity=1.0, glow_opacity=1.0):
     """Alpha-composites the pointer icon onto `frame` with its apex at `apex`.
 
     Returns True if drawn, False if the icon asset is unusable.
@@ -92,12 +97,18 @@ def _draw_pointer_icon(frame, apex, target_width):
     src_h, src_w = icon.shape[:2]
     target_height = max(1, round(target_width * src_h / src_w))
     resized = cv2.resize(icon, (target_width, target_height), interpolation=cv2.INTER_AREA)
+    resized[:, :, 3] = (resized[:, :, 3].astype(np.float32) * opacity).clip(0, 255).astype(np.uint8)
 
     apex_x, apex_y = apex
     left = apex_x - target_width // 2
     top = apex_y - target_height  # icon's bottom row (the apex) lands on apex_y
 
-    _blit_glow(frame, resized, left, top)
+    # The halo was tuned for a 12px icon: scale its blur and padding with the icon
+    # so it keeps the same proportions at any resolution (e.g. the 1080p snapshot).
+    k = target_width / 12.0
+    blur = max(3, int(round(21 * k)) | 1)  # GaussianBlur needs an odd kernel
+    _blit_glow(frame, resized, left, top, blur_ksize=blur, glow_alpha_scale=glow_opacity,
+               pad=max(1, int(round(14 * k))))
     _alpha_blit(frame, resized, left, top)
     return True
 
@@ -153,7 +164,7 @@ def _alpha_blit(frame, overlay_bgra, left, top):
     frame[dst_y1:dst_y2, dst_x1:dst_x2] = blended.astype(np.uint8)
 
 
-def _draw_fallback_triangle(frame, apex, color, height=34, half_base=24, corner_radius=6):
+def _draw_fallback_triangle(frame, apex, color, height=22, half_base=16, corner_radius=4):
     """Hand-drawn stand-in for the pointer icon (used only if the PNG asset
     can't be loaded), with rounded corners faked via a circle at each vertex."""
     apex_x, apex_y = apex

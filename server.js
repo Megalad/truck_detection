@@ -127,9 +127,9 @@ app.post("/api/infer", upload.single("video"), (request, response) => {
     "--threshold-seconds",
     "5",
     "--conf",
-    selectedModel === "model_2" ? "0.40" : "0.35",
+    "0.5",
     "--device",
-    process.env.YOLO_DEVICE || "mps",
+    process.env.YOLO_DEVICE || "auto",
     ...(roi ? ["--roi", roi] : []),
   ]);
 
