@@ -1,0 +1,23 @@
+# Keep the build context small: none of this belongs in an image.
+.git
+.venv
+node_modules
+dist
+.env
+.DS_Store
+**/__pycache__
+Ultralytics
+uploads
+outputs
+
+# Weights and media are mounted / copied to the server separately (see docker-compose.yml)
+models
+*.pt
+*.onnx
+*.mlpackage
+public/evidence_snapshots
+public/evidence_videos
+public/recorded_videos
+public/demo
+public/report/*.mov
+public/report/*.mp4

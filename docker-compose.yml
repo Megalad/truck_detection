@@ -1,38 +1,47 @@
-version: '3.8'
-
+# Set DB_PASSWORD (and TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID) in a .env file next to this one.
+# Copy to the server separately, not via git: models/ (model_v6.pt, reid_resnet34_veri776.onnx),
+# calibration.json is tracked, public/demo/ (replay clips).
 services:
   node-server:
-    build: .
-    image: section35-app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: section35-node
     container_name: section35-node
-    command: npm start
     restart: unless-stopped
-    volumes:
-      - ./uploads:/app/uploads
-      - ./outputs:/app/outputs
     environment:
       - PORT=3001
       - NODE_ENV=production
       - DB_HOST=db
-      - DB_PASSWORD=password
+      - DB_USER=root
+      - DB_PASSWORD=${DB_PASSWORD:?set DB_PASSWORD in .env}
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
   python-server:
-    build: .
-    image: section35-app
+    build:
+      context: .
+      dockerfile: Dockerfile.python   # use Dockerfile.gpu on a GPU host (and give the service a GPU)
+    image: section35-python
     container_name: section35-python
-    command: python scripts/live_server.py
     restart: unless-stopped
-    depends_on:
-      - node-server
-      - db
-    # Model is pre-downloaded, but we don't need volumes for the live server unless it saves data.
-    # We share the same image so it has all the dependencies.
     environment:
       - PYTHONUNBUFFERED=1
       - DB_HOST=db
-      - DB_PASSWORD=password
+      - DB_USER=root
+      - DB_PASSWORD=${DB_PASSWORD:?set DB_PASSWORD in .env}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - ./models:/app/models:ro                     # detector + re-ID weights (not in git)
+      - ./calibration.json:/app/calibration.json    # speed calibration; the server rewrites it, so it persists
+      - evidence_snapshots:/app/public/evidence_snapshots
+      - recorded_videos:/app/public/recorded_videos
+      - calibration_results:/app/public/calibration_results
+    depends_on:
+      db:
+        condition: service_healthy
 
   nginx:
     image: nginx:alpine
@@ -42,6 +51,7 @@ services:
       - "80:80"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./public/demo:/srv/demo:ro                  # Plan-B replay clips
     depends_on:
       - node-server
       - python-server
@@ -51,13 +61,20 @@ services:
     container_name: section35-db
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: password
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
       MYSQL_DATABASE: section35_db
     volumes:
       - db_data:/var/lib/mysql
       - ./setup.sql:/docker-entrypoint-initdb.d/setup.sql:ro
-    ports:
-      - "3306:3306"
+    # No published port: only the other containers can reach the database.
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
 
 volumes:
   db_data:
+  evidence_snapshots:
+  recorded_videos:
+  calibration_results:
