@@ -3,7 +3,6 @@ import "./styles.css";
 import { CAMERAS } from "./cameras";
 import LiveCCTVPlayer from "./components/LiveCCTVPlayer";
 import CameraNetworkMap from "./components/CameraNetworkMap";
-import RecordedPlayback from "./components/RecordedPlayback";
 import ProjectReport from "./components/ProjectReport";
 import ReportCharts from "./components/ReportCharts";
 import ViewToggle from "./components/ViewToggle";
@@ -482,12 +481,6 @@ export default function App() {
             Live Monitoring
           </button>
           <button
-            className={`pb-4 px-1 text-[15px] font-semibold transition-colors border-b-2 ${currentView === "playback" ? "text-amber-600 border-amber-600" : "text-gray-500 hover:text-gray-900 border-transparent"}`}
-            onClick={() => setCurrentView("playback")}
-          >
-            Recorded Playback
-          </button>
-          <button
             className={`pb-4 px-1 text-[15px] font-semibold transition-colors border-b-2 ${currentView === "evidence" ? "text-amber-600 border-amber-600" : "text-gray-500 hover:text-gray-900 border-transparent"}`}
             onClick={() => setCurrentView("evidence")}
           >
@@ -512,9 +505,6 @@ export default function App() {
       <main className="flex-1 p-8 bg-gray-50">
         <div style={{ display: currentView === "live" ? "block" : "none" }}>
           <LiveMonitoringView />
-        </div>
-        <div style={{ display: currentView === "playback" ? "block" : "none" }}>
-          <RecordedPlayback />
         </div>
         {currentView === "evidence" && <EvidenceHistoryView />}
         {currentView === "charts" && <ReportCharts />}

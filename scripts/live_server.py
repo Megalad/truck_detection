@@ -443,53 +443,6 @@ def process_recorded(req: ProcessRequest):
     return {"status": "success", "processed_url": f"/recorded_videos/{output_filename}", "evidence": evidence}
 
 
-UPLOAD_MAX_BYTES = 500 * 1024 * 1024
-UPLOAD_CAMERA_ID = "UPLOAD"
-
-@app.post("/api/process_upload")
-async def process_upload(request: Request, camera_id: str = UPLOAD_CAMERA_ID, roi: str = ""):
-    """Same pipeline as recorded playback, for a clip the operator uploads: the body is the
-    raw MP4 (streamed to disk); roi is a JSON list of {x, y} points normalised 0-1. Violations
-    are NOT saved to the database or sent to Telegram; the evidence images come back in the
-    response (`evidence`) to be shown under the processed video."""
-    if not re.match(r"^[A-Za-z0-9_-]{1,64}$", camera_id):
-        raise HTTPException(status_code=400, detail="bad camera id")
-    try:
-        roi_points = json.loads(roi) if roi else []
-        if not isinstance(roi_points, list):
-            raise ValueError
-    except ValueError:
-        raise HTTPException(status_code=400, detail="bad roi")
-    job = f"upload_{int(time.time())}_{os.getpid()}_{threading.get_ident() % 10000}"
-    rec_dir = os.path.join(base_dir, "public", "recorded_videos")
-    os.makedirs(rec_dir, exist_ok=True)
-    input_path = os.path.join(rec_dir, f"{job}.mp4")
-    output_filename = f"{job}_processed.mp4"
-    evidence_name = f"{job}_evidence"
-    size = 0
-    evidence = []
-    try:
-        with open(input_path, "wb") as f:
-            async for chunk in request.stream():
-                size += len(chunk)
-                if size > UPLOAD_MAX_BYTES:
-                    raise HTTPException(status_code=413, detail="file too large")
-                f.write(chunk)
-        if size == 0:
-            raise HTTPException(status_code=400, detail="empty upload")
-        evidence = await asyncio.get_running_loop().run_in_executor(
-            None, functools.partial(
-                _process_video, input_path, os.path.join(rec_dir, output_filename), camera_id, roi_points,
-                evidence_dir=os.path.join(rec_dir, evidence_name),
-                evidence_url_prefix=f"/recorded_videos/{evidence_name}"))
-    finally:
-        try:
-            os.remove(input_path)
-        except OSError:
-            pass
-    return {"status": "success", "processed_url": f"/recorded_videos/{output_filename}", "evidence": evidence}
-
-
 def _process_video(input_path, output_path, camera_id, roi_points, evidence_dir=None, evidence_url_prefix=None):
     """Runs a video through the SAME rules as live monitoring and writes the annotated copy to
     output_path: same frame size, NMS, ROI test point, debounce, de-duplication, evidence

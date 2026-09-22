@@ -2,9 +2,7 @@ import express from "express";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import multer from "multer";
 import mysql from "mysql2/promise";
 import { CAMERAS } from "./src/cameras.js";
 
@@ -12,37 +10,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
 const port = process.env.PORT || 3001;
-const uploadsPath = path.join(__dirname, "uploads");
-const outputsPath = path.join(__dirname, "outputs");
 const calibrationPath = path.join(__dirname, "public", "calibration_results");
-const localPythonPath = path.join(__dirname, ".venv", "bin", "python");
-const pythonBin = fs.existsSync(localPythonPath) ? localPythonPath : "python3";
-const modelPaths = {
-  model_1: path.join(__dirname, "models", "model_v1.pt"),
-  model_2: path.join(__dirname, "models", "model_v2.pt"),
-  model_current: path.join(__dirname, "models", "model_v6.pt"),
-};
-
-fs.mkdirSync(uploadsPath, { recursive: true });
-fs.mkdirSync(outputsPath, { recursive: true });
-
-const upload = multer({
-  dest: uploadsPath,
-  limits: {
-    fileSize: 500 * 1024 * 1024,
-  },
-  fileFilter: (_request, file, callback) => {
-    if (file.mimetype === "video/mp4") {
-      callback(null, true);
-      return;
-    }
-
-    callback(new Error("Only MP4 videos are supported."));
-  },
-});
 
 app.use(express.json());
-app.use("/outputs", express.static(outputsPath));
 app.use("/calibration_results", express.static(calibrationPath));
 
 // The org's master CCTV list (112 cameras) - src/cameras.js's curated subset is derived from
@@ -68,22 +38,6 @@ app.get("/api/health", (_request, response) => {
   });
 });
 
-app.get("/api/models", (_request, response) => {
-  const models = Object.entries(modelPaths).map(([id, filePath]) => {
-    const fileName = path.basename(filePath);
-    const stats = fs.existsSync(filePath) ? fs.statSync(filePath) : null;
-
-    return {
-      id,
-      fileName,
-      available: Boolean(stats),
-      sizeMb: stats ? Number((stats.size / 1024 / 1024).toFixed(2)) : null,
-    };
-  });
-
-  response.json({ models });
-});
-
 const dbConfig = {
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'root',
@@ -106,79 +60,6 @@ app.get("/api/violations", async (request, response) => {
     console.error("Database Fetch Error:", error);
     response.status(500).json({ error: "Failed to fetch violations" });
   }
-});
-
-app.post("/api/infer", upload.single("video"), (request, response) => {
-  const selectedModel = request.body.model || "model_current";
-  const modelPath = modelPaths[selectedModel];
-  const roi = typeof request.body.roi === "string" && request.body.roi.length > 0 ? request.body.roi : null;
-
-  if (!modelPath || !fs.existsSync(modelPath)) {
-    if (request.file?.path) fs.rmSync(request.file.path, { force: true });
-    response.status(400).json({ error: "Selected model is not available." });
-    return;
-  }
-
-  if (!request.file) {
-    response.status(400).json({ error: "Upload an MP4 video before running inference." });
-    return;
-  }
-
-  const jobId = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-  const inputPath = path.join(uploadsPath, `${jobId}.mp4`);
-  const outputName = `${jobId}-enforcement.mp4`;
-  const outputPath = path.join(outputsPath, outputName);
-
-  fs.renameSync(request.file.path, inputPath);
-
-  const worker = spawn(pythonBin, [
-    path.join(__dirname, "scripts", "run_inference.py"),
-    "--model",
-    modelPath,
-    "--input",
-    inputPath,
-    "--output",
-    outputPath,
-    "--fps",
-    "30",
-    "--threshold-seconds",
-    "5",
-    "--conf",
-    "0.5",
-    "--device",
-    process.env.YOLO_DEVICE || "auto",
-    ...(roi ? ["--roi", roi] : []),
-  ]);
-
-  let stdout = "";
-  let stderr = "";
-
-  worker.stdout.on("data", (chunk) => {
-    stdout += chunk.toString();
-  });
-
-  worker.stderr.on("data", (chunk) => {
-    stderr += chunk.toString();
-  });
-
-  worker.on("close", (code) => {
-    fs.rmSync(inputPath, { force: true });
-
-    if (code !== 0 || !fs.existsSync(outputPath)) {
-      response.status(500).json({
-        error: "Inference failed. Check Python dependencies and model compatibility.",
-        details: stderr || stdout,
-      });
-      return;
-    }
-
-    response.json({
-      ok: true,
-      model: selectedModel,
-      outputUrl: `/outputs/${outputName}`,
-      log: stdout.trim(),
-    });
-  });
 });
 
 // CCTV proxy: the camera servers are plain HTTP (http://1.4.213.19:...). Fetching that
