@@ -14,23 +14,35 @@ track_high_thresh: 0.35
 track_low_thresh: 0.10
 new_track_thresh: 0.45      # slower to spawn a brand-new id -> fewer duplicate tracks
 
-# Frames a lost track is kept alive waiting to be re-matched. Motorway trucks
-# get occluded by gantries / other vehicles for up to ~2-3 s; at ~15-25 fps
-# processed, 120 covers that. speed_estimator's LONG_GAP_SECONDS still guards
-# against a stale re-acquire producing a jump.
+# Frames a lost track is kept alive waiting to be re-matched, i.e. before that id is
+# given up on for good. This is a raw FRAME count (Ultralytics does not scale it by real
+# elapsed time), so how much real time it covers depends entirely on how fast frames are
+# actually being processed - at ~15fps that's ~2s, far less under a loaded/CPU-only server.
+# speed_estimator's own LONG_GAP_SECONDS (measured in real time, unlike this) still guards
+# against a stale re-acquire producing a speed jump even so.
 track_buffer: 30
 
-# A truck's box changes shape a lot as it passes under the camera (cab only ->
-# cab + trailer). Loosen IoU matching a little so that doesn't break the track.
-match_thresh: 0.6
+# match_thresh is a MAXIMUM allowed cost (1 - IoU, roughly), not a similarity score - LOWER
+# is STRICTER, not looser (confirmed against Ultralytics' own linear_assignment/iou_distance:
+# a match is rejected once its cost exceeds this). This was set to 0.6, tighter than
+# Ultralytics' own default of 0.8, backwards from the comment's intent below and from what a
+# truck's box actually needs (its shape changes a lot passing under the camera - cab only ->
+# cab + trailer). Measured live against TV03CL2 for 60s each: at 0.6, 18% of tracks were a
+# single observation (an id born and immediately lost) and median track lifetime was 2.5s;
+# at 0.85, single-observation tracks dropped to 8% and median lifetime rose to 4.3s - most of
+# the reported label flicker and speed stuck on "Tracking..."/0.0 was this: a track dying and
+# a new one spawning for the same physical truck resets speed_estimator's Kalman filter.
+match_thresh: 0.85
 fuse_score: True
 
 # Fixed camera: global motion compensation is pure overhead and can inject
 # spurious motion. Turn it off.
 gmc_method: none
 
-# No appearance ReID here (handled separately by reid_engine for cross-camera).
+# No dedicated ReID model here (handled separately by reid_engine for cross-camera matching);
+# "auto" uses the detector's own backbone features as a lightweight appearance cue on top of
+# IoU, which helps tell two nearby trucks apart during re-acquisition after a brief loss.
 proximity_thresh: 0.5
 appearance_thresh: 0.8
-with_reid: Trued
+with_reid: True
 model: auto
