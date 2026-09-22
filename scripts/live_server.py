@@ -127,6 +127,15 @@ ROI_DEBOUNCE_FRAMES = 15
 # same duration (see process_recorded). Tune LIVE_FPS_ESTIMATE if live runs faster/slower.
 LIVE_FRAME_WIDTH = 640
 LIVE_FPS_ESTIMATE = 10.0
+# Live's own debounce is measured in real elapsed seconds rather than a frame count: a slow
+# server (CPU-only inference, several cameras open, etc.) delivers frames far slower than the
+# video plays, so a frame-count debounce can span many real seconds - long enough for a fast
+# truck to cross the ROI and leave before enough frames ever accumulate, silently missing it.
+# Time-based debounce stays ~1.5s (15 frames @ LIVE_FPS_ESTIMATE) no matter how fast frames
+# actually arrive. Recorded playback keeps the frame-count version (debounce_frames below) -
+# it processes every video frame regardless of wall-clock speed, so that timing is already
+# exact and isn't subject to this problem.
+ROI_DEBOUNCE_SECONDS = ROI_DEBOUNCE_FRAMES / LIVE_FPS_ESTIMATE
 # Detection confidence used by every pipeline (live + recorded). Lower values
 # keep tracks alive through dips (distance/night); higher values cut false boxes.
 DETECTION_CONF = 0.5
@@ -655,7 +664,7 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
     conn_model = YOLO(model_path)
     loop = asyncio.get_running_loop()
     speed_estimator.reset_estimator(camera_id)   # fresh Kalman state per connection
-    roi_streak = collections.defaultdict(int)    # track_id -> consecutive in-ROI frames
+    roi_enter_time = {}    # track_id -> wall-clock time it first entered the ROI (this streak)
     prev_gray = None
     opt_points = {}
     print(f"[{camera_id}] Loaded a private model instance for this connection")
@@ -846,13 +855,17 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                                 in_roi = cv2.pointPolygonTest(roi_poly, wheel_point, False) >= 0
 
                                 if track_id != -1:
-                                    roi_streak[track_id] = roi_streak[track_id] + 1 if in_roi else 0
+                                    if in_roi:
+                                        roi_enter_time.setdefault(track_id, current_time_sec)
+                                    else:
+                                        roi_enter_time.pop(track_id, None)
 
                                 over_limit = SPEED_LIMIT_KMH <= 0 or (speed_kmh is not None and speed_kmh >= SPEED_LIMIT_KMH)
                                 confirmed = (
                                     in_roi
                                     and track_id != -1
-                                    and roi_streak[track_id] >= ROI_DEBOUNCE_FRAMES
+                                    and track_id in roi_enter_time
+                                    and current_time_sec - roi_enter_time[track_id] >= ROI_DEBOUNCE_SECONDS
                                     and over_limit
                                 )
 
@@ -914,8 +927,8 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                     # "Tracking..." every time the detector flickers for a frame)
                     speed_estimator.get_estimator(camera_id, w, h).cleanup(track_ids, now=current_time_sec)
                     _live_ids = {int(t) for t in track_ids}
-                    for _tid in [t for t in roi_streak if t not in _live_ids]:
-                        del roi_streak[_tid]
+                    for _tid in [t for t in roi_enter_time if t not in _live_ids]:
+                        del roi_enter_time[_tid]
 
                 # Send violation alert if needed
                 fps = 0.0
