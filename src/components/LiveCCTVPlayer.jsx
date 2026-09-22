@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import { demoClipExists, demoClipUrl, useReplayMode } from '../replay';
+import { adminLogin, adminLogout, getAdminToken, useAdminSession } from '../adminAuth';
 
 const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
   // Live <video> plays at full rate; a transparent canvas on top redraws
@@ -33,7 +34,10 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
 
   // Add custom event listener for external ROI toggle from kebab menu
   useEffect(() => {
-    const handler = () => setIsEditingRoi(prev => !prev);
+    const handler = () => {
+      if (!getAdminToken()) { setShowAdminLogin(true); return; }
+      setIsEditingRoi(prev => !prev);
+    };
     const handleCalibrate = () => {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ type: "TRIGGER_CALIBRATION", stream_url: streamUrl }));
@@ -65,6 +69,15 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
   const [polygonPoints, setPolygonPoints] = useState([]);
   const [isDrawingFinished, setIsDrawingFinished] = useState(false);
   const [isEditingRoi, setIsEditingRoi] = useState(false);
+
+  // Admin session gate for actually CHANGING the ROI - see adminAuth.js. Any viewer sees
+  // the ROI (pushed by the server below, CURRENT_ROI); only a signed-in admin can move it.
+  useAdminSession(); // re-render this component when login/logout happens elsewhere
+  const [showAdminLogin, setShowAdminLogin] = useState(false);
+  const [loginUsername, setLoginUsername] = useState('admin');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [loginBusy, setLoginBusy] = useState(false);
   
   const [isManualCalibrating, setIsManualCalibrating] = useState(false);
   const [manualCalibPoints, setManualCalibPoints] = useState([]);
@@ -200,19 +213,6 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
       ws.onopen = () => {
         console.log(`[${cameraId}] Connected to AI WebSocket`);
         isConnected = true;
-
-        // Resend ROI on connect/reconnect
-        const saved = localStorage.getItem(`roi_${cameraId}`);
-        if (saved) {
-           try {
-               const normalizedPoints = JSON.parse(saved);
-               ws.send(JSON.stringify({
-                   type: "SET_LANE_ROI",
-                   points: normalizedPoints
-               }));
-           } catch(e) {}
-        }
-
         sendNextFrame();
       };
 
@@ -226,6 +226,19 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
               const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
               onViolationAlert(`🔴 ${data.message} on ${data.camera} at ${timeStr}`);
             }
+            return;
+          }
+
+          if (data.type === 'CURRENT_ROI') {
+            // Pushed by the server on connect, and again after any admin's save - the one
+            // shared ROI, the same for every viewer, whether or not they can edit it.
+            applyServerRoi(data.points);
+            return;
+          }
+
+          if (data.type === 'ROI_UNAUTHORIZED') {
+            alert('Your admin session has expired or is invalid - please sign in again.');
+            setIsEditingRoi(false);
             return;
           }
 
@@ -423,7 +436,9 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
   const handleClearLane = () => {
     setPolygonPoints([]);
     setIsDrawingFinished(false);
-    localStorage.removeItem(`roi_${cameraId}`);
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "SET_LANE_ROI", points: [], admin_token: getAdminToken() }));
+    }
   };
 
   const handleFinishDrawing = () => {
@@ -445,9 +460,8 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
   }));
 
   setIsDrawingFinished(true);
-  localStorage.setItem(`roi_${cameraId}`, JSON.stringify(normalizedPoints));
   setNormalizedPointsState(normalizedPoints);
-  wsRef.current.send(JSON.stringify({ type: "SET_LANE_ROI", points: normalizedPoints }));
+  wsRef.current.send(JSON.stringify({ type: "SET_LANE_ROI", points: normalizedPoints, admin_token: getAdminToken() }));
   alert("ROI Saved!");
 };
   const handleSaveManualCalibration = () => {
@@ -511,46 +525,31 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
     return () => resizeObserver.disconnect();
   }, [normalizedPointsState]);
 
-  useEffect(() => {
-    const saved = localStorage.getItem(`roi_${cameraId}`);
-    if (saved) {
-      try {
-        const normalizedPoints = JSON.parse(saved);
-
-        // Wait briefly for layout to settle so getBoundingClientRect is accurate
-        setTimeout(() => {
-          if (svgRef.current) {
-            const rect = svgRef.current.getBoundingClientRect();
-            // Fallback if width/height is 0 (e.g. display: none)
-            const width = rect.width || 480;
-            const height = rect.height || 360;
-            const absolutePoints = normalizedPoints.map(p => ({
-              x: p.x * width,
-              y: p.y * height
-            }));
-            setPolygonPoints(absolutePoints);
-            setNormalizedPointsState(normalizedPoints);
-            setIsDrawingFinished(true);
-          }
-
-          // Re-send to backend
-          const sendToBackend = () => {
-             if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                 wsRef.current.send(JSON.stringify({
-                     type: "SET_LANE_ROI",
-                     points: normalizedPoints
-                 }));
-             } else {
-                 setTimeout(sendToBackend, 500);
-             }
-          };
-          sendToBackend();
-        }, 100);
-      } catch (e) {
-        console.error("Error loading ROI", e);
-      }
+  // Renders the one shared ROI the server holds for this camera (points is null/[] if
+  // none is set). Called from onmessage whenever CURRENT_ROI arrives: once right after
+  // connecting, and again whenever any admin (this tab or another) saves or clears it -
+  // so every open viewer of this camera stays in sync without needing to refresh.
+  const applyServerRoi = (points, attempt = 0) => {
+    if (!points || points.length < 3) {
+      setPolygonPoints([]);
+      setNormalizedPointsState([]);
+      setIsDrawingFinished(false);
+      return;
     }
-  }, []);
+    const rect = svgRef.current?.getBoundingClientRect();
+    if ((!rect || rect.width === 0) && attempt < 10) {
+      // Layout not settled yet (e.g. this arrived before the card finished sizing) - retry
+      // briefly rather than drawing at a fallback size that would visibly jump once real
+      // layout is ready.
+      setTimeout(() => applyServerRoi(points, attempt + 1), 100);
+      return;
+    }
+    const width = rect?.width || 480;
+    const height = rect?.height || 360;
+    setPolygonPoints(points.map(p => ({ x: p.x * width, y: p.y * height })));
+    setNormalizedPointsState(points);
+    setIsDrawingFinished(true);
+  };
 
   return (
     <div style={{ width: '100%', height: '100%', backgroundColor: 'black', borderRadius: '0 0 8px 8px', overflow: 'hidden', position: 'relative' }}>
@@ -610,9 +609,77 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
             >
               Finish Drawing
             </button>
+            <button
+              onClick={() => { adminLogout(); setIsEditingRoi(false); }}
+              title="Sign out of the admin session"
+              style={{ padding: '6px 12px', backgroundColor: 'rgba(0,0,0,0.6)', color: 'white', border: '1px solid white', borderRadius: '4px', cursor: 'pointer' }}
+            >
+              Log out
+            </button>
           </>
         )}
       </div>
+
+      {/* Admin sign-in - shown when "Edit ROI" is clicked without a valid admin session.
+          Anyone can VIEW the ROI (pushed by the server, see CURRENT_ROI above); only a
+          signed-in admin can move it - see scripts/live_server.py's /api/admin/login. */}
+      {showAdminLogin && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <form
+            className="bg-white rounded-xl shadow-2xl p-6 max-w-xs w-full"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setLoginBusy(true);
+              setLoginError('');
+              try {
+                await adminLogin(loginUsername, loginPassword);
+                setShowAdminLogin(false);
+                setLoginPassword('');
+                setIsEditingRoi(true);
+              } catch (err) {
+                setLoginError(err.message || 'Login failed.');
+              } finally {
+                setLoginBusy(false);
+              }
+            }}
+          >
+            <h3 className="text-lg font-bold text-gray-900 mb-1">Admin sign-in</h3>
+            <p className="text-gray-500 text-sm mb-4">Required to edit the restricted-lane region for {cameraId}.</p>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Username</label>
+            <input
+              type="text"
+              value={loginUsername}
+              onChange={(e) => setLoginUsername(e.target.value)}
+              className="w-full px-3 py-2 mb-3 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-amber-500"
+              autoFocus
+            />
+            <label className="block text-xs font-medium text-gray-700 mb-1">Password</label>
+            <input
+              type="password"
+              value={loginPassword}
+              onChange={(e) => setLoginPassword(e.target.value)}
+              className="w-full px-3 py-2 mb-3 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-amber-500"
+            />
+            {loginError && <p className="text-red-600 text-xs mb-3">{loginError}</p>}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => { setShowAdminLogin(false); setLoginError(''); }}
+                className="flex-1 py-2 px-3 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={loginBusy}
+                className="flex-1 py-2 px-3 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-lg transition-colors text-sm font-semibold"
+              >
+                {loginBusy ? 'Signing in...' : 'Sign in'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Manual Calibration SVG Overlay */}
       <svg

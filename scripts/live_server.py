@@ -15,6 +15,7 @@ import time
 import collections
 import threading
 import re
+import secrets
 import shutil
 import traceback
 import mysql.connector
@@ -83,8 +84,61 @@ print(f"Loading YOLO model from {model_path}...")
 model = ultralytics.YOLO(model_path)
 print("Model loaded successfully.")
 
-# Global state for ROIs and alerts
+# --- ROI persistence + admin auth -----------------------------------------
+# The ROI used to live only in each browser's own localStorage, resent on connect and
+# otherwise invisible to anyone else - a different viewer's browser had nothing to
+# render, and the server-side value (used for actual violation detection) was reset to
+# None on every single new connection to a camera, admin or not. Now it's saved here,
+# on the server, and pushed to every viewer on connect (see CURRENT_ROI below); only a
+# signed-in admin session may change it via SET_LANE_ROI. camera_rois is the in-memory
+# working copy; ROI_FILE is what actually persists it across restarts.
 camera_rois = {}
+ROI_FILE = os.path.join(base_dir, "rois.json")
+
+
+def _load_rois():
+    try:
+        with open(ROI_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_roi(camera_id, points):
+    data = _load_rois()
+    if points:
+        data[camera_id] = points
+    else:
+        data.pop(camera_id, None)
+    try:
+        with open(ROI_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except OSError as e:
+        print(f"WARNING: could not persist rois.json: {e}")
+
+
+# Single shared admin account (this site has exactly one operator role, not
+# per-person accounts) - set in .env, never hardcoded. No default password: an
+# unset ADMIN_PASSWORD disables login entirely rather than silently accepting
+# a guessable one.
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+ADMIN_SESSION_SECONDS = 12 * 3600  # a work day; avoids re-login mid-demo without staying open forever
+admin_sessions = {}  # token -> expiry (unix seconds)
+
+
+def _valid_admin_token(token):
+    if not token:
+        return False
+    exp = admin_sessions.get(token)
+    if exp is None:
+        return False
+    if time.time() > exp:
+        admin_sessions.pop(token, None)
+        return False
+    return True
+
+
 last_alert_times = {}
 alerted_track_ids = __import__('collections').defaultdict(set)
 COOLDOWN_SECONDS = 15.0
@@ -312,6 +366,39 @@ async def set_speed_limit(req: SpeedLimitRequest):
         print(f"WARNING: could not persist speed limit: {e}")
     print(f"Global speed limit set to {SPEED_LIMIT_KMH} km/h")
     return {"value": SPEED_LIMIT_KMH}
+
+
+class AdminLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/admin/login")
+async def admin_login(req: AdminLoginRequest):
+    if not ADMIN_PASSWORD:
+        raise HTTPException(status_code=503, detail="Admin login is not configured (set ADMIN_PASSWORD)")
+    # Constant-time compare: a plain == leaks timing info character-by-character, which
+    # matters for a password check even on a small demo site.
+    import hmac
+    ok_user = hmac.compare_digest(req.username, ADMIN_USERNAME)
+    ok_pass = hmac.compare_digest(req.password, ADMIN_PASSWORD)
+    if not (ok_user and ok_pass):
+        raise HTTPException(status_code=401, detail="Incorrect username or password")
+    token = secrets.token_urlsafe(32)
+    expires_at = time.time() + ADMIN_SESSION_SECONDS
+    admin_sessions[token] = expires_at
+    return {"token": token, "expires_at": expires_at}
+
+
+class AdminLogoutRequest(BaseModel):
+    token: str
+
+
+@app.post("/api/admin/logout")
+async def admin_logout(req: AdminLogoutRequest):
+    admin_sessions.pop(req.token, None)
+    return {"ok": True}
+
 
 # Live-style overlay (mirrors LiveCCTVPlayer.jsx: green box + green label chip, translucent
 # red ROI with red vertex dots), drawn into the processed video so playback looks like live.
@@ -658,7 +745,11 @@ def _process_video(input_path, output_path, camera_id, roi_points, evidence_dir=
 async def websocket_endpoint(websocket: WebSocket, camera_id: str):
     await websocket.accept()
     print(f"[{camera_id}] WebSocket connection opened")
-    camera_rois[camera_id] = None
+    # Reload from disk (not just the in-memory cache) so a change saved by another
+    # worker/restart is picked up, then push it straight to this viewer - everyone
+    # who opens this camera sees the same ROI, whether or not they can edit it.
+    camera_rois[camera_id] = _load_rois().get(camera_id)
+    await websocket.send_json({"type": "CURRENT_ROI", "points": camera_rois[camera_id]})
     last_alert_times[camera_id] = 0.0
 
     # Bug fix (1 + 2): give every connection its OWN model so the per-model
@@ -693,8 +784,20 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                 try:
                     data = json.loads(message["text"])
                     if data.get("type") == "SET_LANE_ROI":
-                        camera_rois[camera_id] = data.get("points")
-                        print(f"[{camera_id}] Updated ROI: {camera_rois[camera_id]}")
+                        if not _valid_admin_token(data.get("admin_token")):
+                            print(f"[{camera_id}] Rejected SET_LANE_ROI: no/expired admin session")
+                            await websocket.send_json({"type": "ROI_UNAUTHORIZED"})
+                        else:
+                            points = data.get("points") or []
+                            camera_rois[camera_id] = points if points else None
+                            _save_roi(camera_id, points if points else None)
+                            print(f"[{camera_id}] Updated ROI: {camera_rois[camera_id]}")
+                            # Reflect the confirmed save back to whoever changed it - the admin's
+                            # own UI already updated optimistically, but this keeps it consistent
+                            # if the save is ever rejected/altered server-side in the future, and
+                            # gives every OTHER open tab on this same camera a way to pick it up
+                            # too, next time they reconnect.
+                            await websocket.send_json({"type": "CURRENT_ROI", "points": camera_rois[camera_id]})
                     elif data.get("type") == "TRIGGER_CALIBRATION":
                         stream_url = data.get("stream_url")
                         print(f"[{camera_id}] TRIGGER_CALIBRATION received! Spawning auto_calibrate_vp.py...")

@@ -33,9 +33,12 @@ services:
       - DB_PASSWORD=${DB_PASSWORD:?set DB_PASSWORD in .env}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env - required to edit any camera's ROI}
     volumes:
       - ./models:/app/models:ro                     # detector + re-ID weights (not in git)
       - ./calibration.json:/app/calibration.json    # speed calibration; the server rewrites it, so it persists
+      - ./rois.json:/app/rois.json                  # per-camera restricted-lane ROI; the server rewrites it too
       - evidence_snapshots:/app/public/evidence_snapshots
       - recorded_videos:/app/public/recorded_videos
       - calibration_results:/app/public/calibration_results
