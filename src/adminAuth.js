@@ -58,7 +58,7 @@ export async function adminLogin(username, password) {
   });
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new Error(data?.detail || `Login failed (HTTP ${res.status}).`);
-  setState({ token: data.token, expires_at: data.expires_at });
+  setState({ token: data.token, expires_at: data.expires_at, username });
 }
 
 export function adminLogout() {

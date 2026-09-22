@@ -10,6 +10,7 @@ import ViewToggle from "./components/ViewToggle";
 import FocusView from "./components/FocusView";
 import SpeedLimitControl from "./components/SpeedLimitControl";
 import ReplayToggle from "./components/ReplayToggle";
+import { adminLogout, useAdminSession } from "./adminAuth";
 
 const VideoCard = ({ cam, idx, setActiveCameraIndex, setCurrentView, handleViolationAlert }) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -441,6 +442,28 @@ function NodeStatusView() {
   );
 }
 
+// Shown in the main nav whenever an admin session is active (see adminAuth.js) - the
+// only persistent, always-visible sign of "you're signed in" and way to log out; before
+// this, "Log out" only existed inside a specific camera's ROI-editing controls, gone the
+// moment that camera wasn't in edit mode.
+function AdminStatus() {
+  const session = useAdminSession();
+  if (!session) return null;
+  return (
+    <div className="flex items-center gap-2 pb-4 ml-auto sm:ml-0">
+      <span className="text-xs font-medium text-gray-500">
+        Signed in as <span className="text-gray-800 font-semibold">{session.username || "admin"}</span>
+      </span>
+      <button
+        onClick={() => { if (window.confirm("Log out of the admin session?")) adminLogout(); }}
+        className="text-xs font-semibold text-amber-600 hover:text-amber-700 underline underline-offset-2"
+      >
+        Log out
+      </button>
+    </div>
+  );
+}
+
 export default function App() {
   const [currentView, setCurrentView] = useState("live");
 
@@ -482,6 +505,7 @@ export default function App() {
           >
             Project Report
           </button>
+          <AdminStatus />
         </nav>
       </header>
 
