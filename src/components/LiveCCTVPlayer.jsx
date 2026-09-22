@@ -82,6 +82,13 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
     let hls;
     const video = videoRef.current;
 
+    // The camera servers are plain HTTP; fetching that directly works fine when this page
+    // itself is HTTP, but browsers silently block it as mixed content once the page is
+    // reached over HTTPS (e.g. via Cloudflare) - the <video> just never loads, no visible
+    // error. Routed through our own server (server.js's /cctv proxy) instead, so the
+    // browser only ever talks to this same origin, regardless of which protocol got used.
+    const proxiedStreamUrl = streamUrl ? `/cctv/${cameraId}/playlist.m3u8` : streamUrl;
+
     // 1. Initialize the video source: a local recording (replay) or the HLS stream
     let watchdog;
     if (video && replay) {
@@ -115,7 +122,7 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
         };
 
         hls = new Hls(optimizedHlsConfig);
-        hls.loadSource(streamUrl);
+        hls.loadSource(proxiedStreamUrl);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           // hls.levels.length - 1 ဆိုတာ အမြင့်ဆုံး Quality (ဥပမာ 1080p) ကို ဆိုလိုပါတယ်
@@ -141,7 +148,7 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
           }
         });
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = streamUrl;
+        video.src = proxiedStreamUrl;
       }
     }
 

@@ -1,10 +1,12 @@
 import express from "express";
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import multer from "multer";
 import mysql from "mysql2/promise";
+import { CAMERAS } from "./src/cameras.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -161,6 +163,59 @@ app.post("/api/infer", upload.single("video"), (request, response) => {
       outputUrl: `/outputs/${outputName}`,
       log: stdout.trim(),
     });
+  });
+});
+
+// CCTV proxy: the camera servers are plain HTTP (http://1.4.213.19:...). Fetching that
+// directly from the browser works fine when the page itself is loaded over HTTP, but once
+// the site is reached over HTTPS (e.g. https://dodovision.me via Cloudflare) browsers
+// silently block it as "mixed content" - the <video> just never loads, no visible error.
+// Routing the stream through this same-origin endpoint instead fixes that for both cases.
+//
+// Every camera's HLS playlist/segment references the next file by a bare relative filename
+// (checked against the live streams; no absolute URLs anywhere in them), so the browser
+// resolves "chunklist_x.m3u8" or "media_x_1.ts" against wherever it fetched the current file
+// from - meaning this one route, unmodified, transparently serves the master playlist, the
+// sub-playlist it points to, AND the .ts segments the sub-playlist points to. No playlist
+// rewriting needed. cameraBaseUrls comes from src/cameras.js (the same list the Live
+// Monitoring grid uses), so this can only ever proxy a camera already on that list, not an
+// arbitrary host - it's not an open proxy.
+const cameraBaseUrls = Object.fromEntries(
+  CAMERAS.filter((c) => c.url.endsWith("playlist.m3u8")).map((c) => [c.id, c.url.slice(0, -"playlist.m3u8".length)])
+);
+const CCTV_FILENAME_RE = /^[A-Za-z0-9_.-]+\.(m3u8|ts)$/;
+
+app.get("/cctv/:cameraId/:file", (request, response) => {
+  const base = cameraBaseUrls[request.params.cameraId];
+  if (!base) {
+    response.status(404).end("Unknown camera");
+    return;
+  }
+  if (!CCTV_FILENAME_RE.test(request.params.file)) {
+    response.status(400).end("Bad filename");
+    return;
+  }
+
+  const upstreamReq = http.get(base + request.params.file, { timeout: 8000 }, (upstreamRes) => {
+    if (upstreamRes.statusCode !== 200) {
+      response.status(502).end("Camera stream unavailable");
+      upstreamRes.resume();
+      return;
+    }
+    response.setHeader(
+      "Content-Type",
+      upstreamRes.headers["content-type"] ||
+        (request.params.file.endsWith(".ts") ? "video/mp2t" : "application/vnd.apple.mpegurl")
+    );
+    // Playlists and segments are both short-lived (a live stream, not a fixed asset) -
+    // never let the browser/CDN reuse a stale one.
+    response.setHeader("Cache-Control", "no-store");
+    upstreamRes.pipe(response);
+  });
+  upstreamReq.on("timeout", () => upstreamReq.destroy(new Error("upstream timeout")));
+  upstreamReq.on("error", (error) => {
+    console.error(`[cctv-proxy] ${request.params.cameraId}/${request.params.file}:`, error.message);
+    if (!response.headersSent) response.status(502).end("Camera stream unreachable");
   });
 });
 

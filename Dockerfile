@@ -13,6 +13,7 @@ ENV NODE_ENV=production
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY server.js ./
+COPY src/cameras.js ./src/cameras.js
 COPY --from=build /app/dist ./dist
 EXPOSE 3001
 CMD ["node", "server.js"]
