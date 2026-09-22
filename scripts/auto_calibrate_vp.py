@@ -286,6 +286,11 @@ def main():
         entry["image_points"] = img_points
         entry["world_points_m"] = world_points
         entry["max_speed_kmh"] = 160
+        # Resolution these points were computed at (old_frame's own size) - speed_estimator.py
+        # rescales to whatever it actually runs at, so this calibration stays correct even if
+        # that's a different resolution (e.g. a downscaled inference frame).
+        entry["image_width"] = w
+        entry["image_height"] = h
         cams[cam_id] = entry
         
         with open(calib_path, "w", encoding="utf-8") as f:

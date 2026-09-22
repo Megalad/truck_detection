@@ -245,10 +245,30 @@ class SpeedEstimator:
 
         # Build the perspective transform (image pixels -> ground-plane metres)
         # only if the camera provides 4+ matched points.
+        #
+        # image_points is recorded at whatever resolution was on screen at calibration time -
+        # both the manual click UI and auto_calibrate_vp.py record it at the stream's NATIVE
+        # resolution (e.g. 1280x720), stored alongside it as image_width/image_height. But
+        # update() below is fed detection boxes in THIS estimator's frame_w x frame_h, which
+        # for live/recorded processing is the downscaled ~640px inference frame, not the native
+        # stream - a straight, unscaled homography built from native-resolution points and then
+        # applied to half-resolution pixels is wrong by roughly an order of magnitude (a
+        # projective transform does not scale linearly like an affine one would), not a clean
+        # 2x - that mismatch was silently producing every wildly-off speed reading. Rescale the
+        # calibration points into this estimator's own pixel space before building the
+        # homography, so calibrating once, at any resolution, stays correct everywhere it's used.
+        # Calibrations recorded before this field existed are assumed to already be in this
+        # estimator's frame_w x frame_h (the old, unscaled behaviour) - see the one-off backfill
+        # noted in calibration.json's _README for the cameras that actually needed correcting.
         self.homography = None
         img_pts = calibration.get("image_points")
         world_pts = calibration.get("world_points_m")
         if img_pts and world_pts and len(img_pts) >= 4 and len(img_pts) == len(world_pts):
+            calib_w = calibration.get("image_width")
+            calib_h = calibration.get("image_height")
+            if calib_w and calib_h and (float(calib_w) != frame_w or float(calib_h) != frame_h):
+                sx, sy = frame_w / float(calib_w), frame_h / float(calib_h)
+                img_pts = [[px * sx, py * sy] for px, py in img_pts]
             src = np.array(img_pts, dtype=np.float32)
             dst = np.array(world_pts, dtype=np.float32)
             self.homography, _ = cv2.findHomography(src, dst)

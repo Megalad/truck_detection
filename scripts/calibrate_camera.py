@@ -233,7 +233,7 @@ def _verify_overlay(frame, H, world_pts):
 # --------------------------------------------------------------------------- #
 # Merge into calibration.json
 # --------------------------------------------------------------------------- #
-def save(camera_id, img_pts, world_pts):
+def save(camera_id, img_pts, world_pts, image_w=None, image_h=None):
     data = {}
     if os.path.exists(CALIB_PATH):
         try:
@@ -247,6 +247,11 @@ def save(camera_id, img_pts, world_pts):
     entry["image_points"] = [[round(x, 1), round(y, 1)] for x, y in img_pts]
     entry["world_points_m"] = [[round(x, 2), round(y, 2)] for x, y in world_pts]
     entry.setdefault("max_speed_kmh", 160)
+    # Resolution these points were picked at - speed_estimator.py rescales to whatever it
+    # actually runs at, so this calibration stays correct even at a different resolution.
+    if image_w and image_h:
+        entry["image_width"] = image_w
+        entry["image_height"] = image_h
     cams[camera_id] = entry
 
     with open(CALIB_PATH, "w", encoding="utf-8") as f:
@@ -296,7 +301,7 @@ def main():
     solve_and_report(img_pts, world_pts, frame)
 
     if input("\nSave this to calibration.json? [y/N] ").strip().lower() == "y":
-        save(args.camera_id, img_pts, world_pts)
+        save(args.camera_id, img_pts, world_pts, image_w=frame.shape[1], image_h=frame.shape[0])
     else:
         print("Not saved.")
 

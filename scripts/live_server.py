@@ -737,6 +737,14 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                             entry["image_points"] = pts
                             entry["world_points_m"] = world_pts
                             entry["max_speed_kmh"] = 160
+                            # Resolution these points were clicked at (browser's native video
+                            # size) - speed_estimator.py rescales to whatever it actually runs
+                            # at, so this calibration stays correct even if that changes.
+                            image_w = data.get("image_width")
+                            image_h = data.get("image_height")
+                            if image_w and image_h:
+                                entry["image_width"] = image_w
+                                entry["image_height"] = image_h
                             cams[camera_id] = entry
                             
                             with open(calib_path, "w") as f:

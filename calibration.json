@@ -33,7 +33,8 @@
     "  point_median      integer  frames of median smoothing on the tracked pixel (default 3)",
     "  window_seconds    number   displacement cross-check window (default 1.0)",
     "  max_accel_mps2    number   cap on how fast the label may change (default 6.0)",
-    "  conv_var          number   filter must converge below this before reporting (default 20.0)"
+    "  conv_var          number   filter must converge below this before reporting (default 20.0)",
+    "BACKFILL NOTE (2026-09-22): image_width/image_height added to every camera below that already had image_points, all set to 1280x720 - confirmed via ffprobe that every camera in src/cameras.js streams natively at 1280x720, and that resolution is what both the manual-click UI and auto_calibrate_vp.py were actually operating in when these points were recorded. Before this, speed_estimator.py applied these native-resolution points directly to ~640px inference-frame pixels with no rescaling - off by roughly 10x (not a clean 2x, since a homography does not scale linearly), which is why speed readings had been so erratic. New calibrations (from either tool) now record their own resolution automatically."
   ],
   "cameras": {
     "_example_TV73R": {
@@ -73,7 +74,9 @@
           18.0
         ]
       ],
-      "max_speed_kmh": 160
+      "max_speed_kmh": 160,
+      "image_width": 1280,
+      "image_height": 720
     },
     "camera2": {
       "fallback_ppm": 20
@@ -115,7 +118,9 @@
           35.25
         ]
       ],
-      "max_speed_kmh": 160
+      "max_speed_kmh": 160,
+      "image_width": 1280,
+      "image_height": 720
     },
     "TV27CL2": {
       "image_points": [
@@ -154,7 +159,9 @@
           0.0
         ]
       ],
-      "max_speed_kmh": 160
+      "max_speed_kmh": 160,
+      "image_width": 1280,
+      "image_height": 720
     },
     "TV27CL1": {
       "image_points": [
@@ -193,7 +200,9 @@
           0.0
         ]
       ],
-      "max_speed_kmh": 160
+      "max_speed_kmh": 160,
+      "image_width": 1280,
+      "image_height": 720
     },
     "TV75R": {
       "image_points": [
@@ -232,7 +241,9 @@
           0.0
         ]
       ],
-      "max_speed_kmh": 160
+      "max_speed_kmh": 160,
+      "image_width": 1280,
+      "image_height": 720
     },
     "TV28CL2": {
       "image_points": [
@@ -271,25 +282,27 @@
           32.63
         ]
       ],
-      "max_speed_kmh": 160
+      "max_speed_kmh": 160,
+      "image_width": 1280,
+      "image_height": 720
     },
     "TV03CL2": {
       "image_points": [
         [
-          668.0438184663537,
-          254.44444444444446
+          666.0406885758998,
+          242.42566510172145
         ],
         [
-          693.0829420970266,
-          252.44131455399062
+          698.0907668231612,
+          241.42410015649452
         ],
         [
-          795.2425665101722,
-          483.80281690140845
+          790.2347417840376,
+          437.7308294209703
         ],
         [
-          732.1439749608763,
-          486.8075117370892
+          720.1251956181534,
+          439.7339593114241
         ]
       ],
       "world_points_m": [
@@ -310,7 +323,9 @@
           0.0
         ]
       ],
-      "max_speed_kmh": 160
+      "max_speed_kmh": 160,
+      "image_width": 1280,
+      "image_height": 720
     },
     "TV35CL2": {
       "image_points": [
@@ -349,7 +364,9 @@
           32.25
         ]
       ],
-      "max_speed_kmh": 160
+      "max_speed_kmh": 160,
+      "image_width": 1280,
+      "image_height": 720
     },
     "TV64CL1": {
       "image_points": [
@@ -388,7 +405,9 @@
           35.56
         ]
       ],
-      "max_speed_kmh": 160
+      "max_speed_kmh": 160,
+      "image_width": 1280,
+      "image_height": 720
     }
   }
 }

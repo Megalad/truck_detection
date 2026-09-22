@@ -473,7 +473,12 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
       type: "SAVE_MANUAL_CALIBRATION", 
       image_points: absolutePoints,
       width_m: manualWidth,
-      length_m: manualLength
+      length_m: manualLength,
+      // Resolution these points were clicked at (the video's native size) - the backend
+      // stores this so speed_estimator.py can rescale correctly if it ever runs at a
+      // different resolution (e.g. the ~640px inference frame vs. this native video).
+      image_width: vw,
+      image_height: vh
     }));
     
     setIsManualCalibrating(false);
