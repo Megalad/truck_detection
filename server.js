@@ -45,6 +45,21 @@ app.use(express.json());
 app.use("/outputs", express.static(outputsPath));
 app.use("/calibration_results", express.static(calibrationPath));
 
+// The org's master CCTV list (112 cameras) - src/cameras.js's curated subset is derived from
+// it, and FocusView reads it directly for each camera's route/km/coordinates metadata. It's a
+// repo-root file, not in public/, so Vite's build doesn't pick it up automatically - serve it
+// explicitly (and before the SPA catch-all below, or that would swallow this route and hand
+// back index.html instead - which is exactly what was happening: a 200 of HTML, not JSON, so
+// the fetch silently failed and "Loading camera details from JSON..." never went away).
+const cameraJsonPath = path.join(__dirname, "camera.json");
+app.get("/camera.json", (_request, response) => {
+  if (!fs.existsSync(cameraJsonPath)) {
+    response.status(404).json({ error: "camera.json not found" });
+    return;
+  }
+  response.sendFile(cameraJsonPath);
+});
+
 app.get("/api/health", (_request, response) => {
   response.json({
     ok: true,
