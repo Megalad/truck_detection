@@ -1,0 +1,26 @@
+# GPU override: use ONLY on a GPU instance (e.g. g4dn.xlarge) with the NVIDIA driver and the
+# NVIDIA Container Toolkit already installed on the HOST (see the setup steps below) - not on the
+# CPU instance. docker-compose.yml alone (no -f flags) still works as the CPU-only setup.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+#
+# Host setup, once, before the first `up`:
+#   1. Easiest: launch the instance from an AMI that already has the NVIDIA driver + Container
+#      Toolkit, e.g. AWS's "Deep Learning Base OSS Nvidia Driver AMI (Ubuntu ...)" - search for it
+#      when picking the AMI. Then only Docker itself needs installing (as on the CPU instance).
+#   2. If using a plain Ubuntu AMI instead, install the NVIDIA driver and then the NVIDIA
+#      Container Toolkit (https://github.com/NVIDIA/nvidia-container-toolkit) and run
+#      `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`.
+#   3. Verify before starting the app: `docker run --rm --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi`
+#      should print the GPU. If that fails, the app's GPU container will fail too - fix this first.
+services:
+  python-server:
+    build:
+      dockerfile: Dockerfile.gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
