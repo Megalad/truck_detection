@@ -138,7 +138,11 @@ LIVE_FPS_ESTIMATE = 10.0
 ROI_DEBOUNCE_SECONDS = ROI_DEBOUNCE_FRAMES / LIVE_FPS_ESTIMATE
 # Detection confidence used by every pipeline (live + recorded). Lower values
 # keep tracks alive through dips (distance/night); higher values cut false boxes.
-DETECTION_CONF = 0.5
+# 0.5 was silently dropping real trucks that were just a bit distant or partly occluded
+# (e.g. one truck behind another) - checked against live frames from 5 cameras: every
+# detection in the 0.35-0.5 band was a genuine truck, none were cars/background, so there
+# was no accuracy cost to lowering it. Revisit if false-positive boxes start showing up.
+DETECTION_CONF = 0.4
 # cuda:0 on an NVIDIA box, mps on Apple silicon, else cpu; override with YOLO_DEVICE.
 DEVICE = pick_device()
 print(f"Inference device: {DEVICE}")
