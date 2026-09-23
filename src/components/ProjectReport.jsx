@@ -8,8 +8,14 @@ import React, { useEffect, useRef, useState } from 'react';
 // lose it, but it naturally resets for a new tab/day, same as the admin login session.
 const STEP1_IMAGE_KEY = 'projectReportStep1Image';
 
+// Matches AI_MAX_WIDTH in LiveCCTVPlayer.jsx - the real width the live system downscales to
+// before sending a frame to the server. Kept as one named constant so step 2's demo actually
+// stays true to that real value instead of a second, easy-to-forget hardcoded copy of it.
+const LIVE_FRAME_WIDTH = 640;
+
 export default function FrameOptimizationReport() {
   const [step1Image, setStep1Image] = useState(null);
+  const [step2Image, setStep2Image] = useState(null);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -18,6 +24,29 @@ export default function FrameOptimizationReport() {
       if (saved) setStep1Image(saved);
     } catch { /* private mode etc. */ }
   }, []);
+
+  // Step 2 ("Resize & send") is a real, live resize of whatever step 1 currently shows -
+  // not a second, separately-uploaded photo. Without this, uploading a fresh photo in step
+  // 1 would leave step 2 stuck on an unrelated old picture, breaking the "one real truck,
+  // followed through every stage" story the whole section is built around.
+  useEffect(() => {
+    if (!step1Image) { setStep2Image(null); return; }
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled) return;
+      const scale = Math.min(1, LIVE_FRAME_WIDTH / img.naturalWidth);
+      const w = Math.round(img.naturalWidth * scale);
+      const h = Math.round(img.naturalHeight * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      setStep2Image(canvas.toDataURL('image/jpeg', 0.6)); // same quality the live system sends at
+    };
+    img.src = step1Image;
+    return () => { cancelled = true; };
+  }, [step1Image]);
 
   const handleStep1Upload = (e) => {
     const file = e.target.files?.[0];
@@ -111,10 +140,19 @@ export default function FrameOptimizationReport() {
             <div style={{ padding: '16px 24px 24px 24px' }}>
               {(step.n !== 1 || step1Image) && (
                 <img
-                  src={step.n === 1 ? step1Image : `/report/${step.img}`}
+                  src={
+                    step.n === 1 ? step1Image
+                    : step.n === 2 && step1Image ? step2Image  // real resize of whatever step 1 currently shows
+                    : `/report/${step.img}`
+                  }
                   alt={step.title}
                   style={{ width: '100%', height: 'auto', borderRadius: '8px', border: '1px solid #e2e8f0', display: 'block', margin: step.img === 'alert.png' ? '0 auto' : undefined, maxWidth: step.img === 'alert.png' ? '440px' : undefined }}
                 />
+              )}
+              {step.n === 2 && step1Image && (
+                <p style={{ margin: '8px 0 0 0', fontSize: '12px', color: '#94a3b8' }}>
+                  A real, live resize of the photo uploaded in step 1 - not a separate picture.
+                </p>
               )}
               {step.n === 1 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '12px' }}>
