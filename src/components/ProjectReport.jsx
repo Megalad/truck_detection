@@ -3,9 +3,92 @@ import React from 'react';
 export default function FrameOptimizationReport() {
   return (
     <div style={{ maxWidth: '1000px', margin: '40px auto', fontFamily: 'system-ui, -apple-system, sans-serif', color: '#1e293b', padding: '20px' }}>
-      
+
       {/* =========================================
-          PART 1: FRAME OPTIMIZATION (Original Code) 
+          PART 0: HOW THE SYSTEM WORKS, STEP BY STEP
+          Every image below is from one real truck, on one real camera (TV03CL2),
+          followed through the actual pipeline in a single pass - not staged.
+          ========================================= */}
+
+      <div style={{ textAlign: 'center', paddingBottom: '24px', borderBottom: '1px solid #e2e8f0', marginBottom: '32px' }}>
+        <h1 style={{ fontSize: '32px', margin: '0 0 8px 0', color: '#0f172a' }}>How the System Works</h1>
+        <p style={{ fontSize: '18px', color: '#64748b', margin: 0 }}>One real truck, followed through every stage of the pipeline</p>
+      </div>
+
+      {[
+        {
+          n: 1,
+          title: 'Capture the frame',
+          body: "The system pulls a live frame straight from the camera's own CCTV feed - here, TV03CL2, at its native 1280×720.",
+          img: 'pipeline_01_capture.jpg',
+        },
+        {
+          n: 2,
+          title: 'Resize & send',
+          body: 'Before anything else, the frame is shrunk to 640px wide (aspect ratio kept, not a square crop) and sent to the Python server over a WebSocket - a smaller frame means faster detection and less network load, with no real accuracy cost.',
+          img: 'pipeline_02_resize.jpg',
+        },
+        {
+          n: 3,
+          title: 'Detect & track',
+          body: 'A YOLO11 model finds every truck in the frame. Each one gets a stable ID that follows it across frames, even as its box changes shape while it drives under the camera.',
+          img: 'pipeline_03_detect.jpg',
+        },
+        {
+          n: 4,
+          title: 'Estimate speed',
+          body: "The truck's ground-contact point is mapped through this camera's own calibration into real-world metres, then a Kalman filter turns that into one steady km/h reading - 12.9 km/h here, not a single noisy frame-to-frame guess.",
+          img: 'pipeline_04_speed.jpg',
+        },
+        {
+          n: 5,
+          title: 'Check the restricted lane',
+          body: "Is the truck's real position inside the marked restricted lane (the red region)? The system checks every frame, but only confirms a violation once the truck has stayed inside for about 1.5 real seconds - not one flickery frame.",
+          img: 'pipeline_05_roi.jpg',
+        },
+        {
+          n: 6,
+          title: 'Capture evidence',
+          body: 'Once confirmed, a 1920×1080 evidence photo is generated: the background dimmed, the truck itself kept bright, and a red marker placed above it - built for a human to review afterward, not just a machine.',
+          img: 'pipeline_06_evidence.jpg',
+        },
+        {
+          n: 7,
+          title: 'Alert sent & saved',
+          body: 'The photo, camera name, and speed are sent to Telegram within seconds, and the same violation is written to the database - where it shows up in the Evidence & History page for review.',
+          img: 'alert.png',
+        },
+      ].map((step, i, arr) => (
+        <React.Fragment key={step.n}>
+          <div style={{ backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', overflow: 'hidden' }}>
+            <div style={{ padding: '20px 24px 4px 24px', display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
+              <span style={{ flexShrink: 0, width: '28px', height: '28px', borderRadius: '50%', backgroundColor: '#3b82f6', color: '#fff', fontSize: '14px', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {step.n}
+              </span>
+              <div>
+                <h4 style={{ color: '#0f172a', margin: '0 0 6px 0', fontSize: '17px' }}>{step.title}</h4>
+                <p style={{ margin: 0, fontSize: '14px', color: '#475569', lineHeight: '1.6' }}>{step.body}</p>
+              </div>
+            </div>
+            <div style={{ padding: '16px 24px 24px 24px' }}>
+              <img
+                src={`/report/${step.img}`}
+                alt={step.title}
+                style={{ width: '100%', height: 'auto', borderRadius: '8px', border: '1px solid #e2e8f0', display: 'block', margin: step.img === 'alert.png' ? '0 auto' : undefined, maxWidth: step.img === 'alert.png' ? '440px' : undefined }}
+              />
+            </div>
+          </div>
+          {i < arr.length - 1 && (
+            <div style={{ textAlign: 'center', color: '#94a3b8', fontSize: '20px', margin: '4px 0' }}>&darr;</div>
+          )}
+        </React.Fragment>
+      ))}
+
+      {/* Visual Separator into the rest of the report (design-decision deep dives) */}
+      <div style={{ margin: '64px 0', borderBottom: '2px dashed #e2e8f0' }}></div>
+
+      {/* =========================================
+          PART 1: FRAME OPTIMIZATION (Original Code)
           ========================================= */}
       
       {/* Header */}
