@@ -1,6 +1,42 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+
+// Step 1's photo can be swapped live from the browser (e.g. mid-demo, if a professor
+// asks to see a genuinely fresh capture) via a file picker, instead of the fixed
+// pipeline_01_capture.jpg. This is entirely local to this browser tab/session - it
+// never uploads anywhere or changes what anyone else sees on the site. Kept in
+// sessionStorage (not localStorage) so an accidental page refresh mid-demo doesn't
+// lose it, but it naturally resets for a new tab/day, same as the admin login session.
+const STEP1_IMAGE_KEY = 'projectReportStep1Image';
 
 export default function FrameOptimizationReport() {
+  const [step1Image, setStep1Image] = useState(null);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem(STEP1_IMAGE_KEY);
+      if (saved) setStep1Image(saved);
+    } catch { /* private mode etc. */ }
+  }, []);
+
+  const handleStep1Upload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      setStep1Image(dataUrl);
+      try { sessionStorage.setItem(STEP1_IMAGE_KEY, dataUrl); } catch { /* quota/private mode - still works for this session */ }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleStep1Reset = () => {
+    setStep1Image(null);
+    try { sessionStorage.removeItem(STEP1_IMAGE_KEY); } catch { /* ignore */ }
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
   return (
     <div style={{ maxWidth: '1000px', margin: '40px auto', fontFamily: 'system-ui, -apple-system, sans-serif', color: '#1e293b', padding: '20px' }}>
 
@@ -72,10 +108,39 @@ export default function FrameOptimizationReport() {
             </div>
             <div style={{ padding: '16px 24px 24px 24px' }}>
               <img
-                src={`/report/${step.img}`}
+                src={step.n === 1 && step1Image ? step1Image : `/report/${step.img}`}
                 alt={step.title}
                 style={{ width: '100%', height: 'auto', borderRadius: '8px', border: '1px solid #e2e8f0', display: 'block', margin: step.img === 'alert.png' ? '0 auto' : undefined, maxWidth: step.img === 'alert.png' ? '440px' : undefined }}
               />
+              {step.n === 1 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '12px' }}>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleStep1Upload}
+                    style={{ display: 'none' }}
+                    id="step1-photo-input"
+                  />
+                  <label
+                    htmlFor="step1-photo-input"
+                    style={{ cursor: 'pointer', fontSize: '13px', fontWeight: 600, color: '#3b82f6', padding: '6px 12px', border: '1px solid #3b82f6', borderRadius: '6px' }}
+                  >
+                    {step1Image ? 'Upload a different photo' : 'Upload a fresh photo'}
+                  </label>
+                  {step1Image && (
+                    <button
+                      onClick={handleStep1Reset}
+                      style={{ cursor: 'pointer', fontSize: '13px', color: '#64748b', background: 'none', border: 'none', padding: '6px 4px', textDecoration: 'underline' }}
+                    >
+                      Reset to default
+                    </button>
+                  )}
+                  <span style={{ fontSize: '12px', color: '#94a3b8' }}>
+                    (this browser only - doesn't change the live site)
+                  </span>
+                </div>
+              )}
             </div>
           </div>
           {i < arr.length - 1 && (
