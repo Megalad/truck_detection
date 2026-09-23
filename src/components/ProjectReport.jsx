@@ -148,7 +148,15 @@ export default function FrameOptimizationReport() {
             </div>
           </div>
           {i < arr.length - 1 && (
-            <div style={{ textAlign: 'center', color: '#94a3b8', fontSize: '20px', margin: '4px 0' }}>&darr;</div>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', margin: '2px 0' }}>
+              <div style={{ width: '2px', height: '16px', backgroundColor: '#dbeafe' }} />
+              <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: '#eff6ff', border: '1px solid #dbeafe', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 5v14M6 13l6 6 6-6" />
+                </svg>
+              </div>
+              <div style={{ width: '2px', height: '16px', backgroundColor: '#dbeafe' }} />
+            </div>
           )}
         </React.Fragment>
       ))}
