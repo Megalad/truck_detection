@@ -103,15 +103,19 @@ export default function FrameOptimizationReport() {
               </span>
               <div>
                 <h4 style={{ color: '#0f172a', margin: '0 0 6px 0', fontSize: '17px' }}>{step.title}</h4>
-                <p style={{ margin: 0, fontSize: '14px', color: '#475569', lineHeight: '1.6' }}>{step.body}</p>
+                {step.n !== 1 && (
+                  <p style={{ margin: 0, fontSize: '14px', color: '#475569', lineHeight: '1.6' }}>{step.body}</p>
+                )}
               </div>
             </div>
             <div style={{ padding: '16px 24px 24px 24px' }}>
-              <img
-                src={step.n === 1 && step1Image ? step1Image : `/report/${step.img}`}
-                alt={step.title}
-                style={{ width: '100%', height: 'auto', borderRadius: '8px', border: '1px solid #e2e8f0', display: 'block', margin: step.img === 'alert.png' ? '0 auto' : undefined, maxWidth: step.img === 'alert.png' ? '440px' : undefined }}
-              />
+              {(step.n !== 1 || step1Image) && (
+                <img
+                  src={step.n === 1 ? step1Image : `/report/${step.img}`}
+                  alt={step.title}
+                  style={{ width: '100%', height: 'auto', borderRadius: '8px', border: '1px solid #e2e8f0', display: 'block', margin: step.img === 'alert.png' ? '0 auto' : undefined, maxWidth: step.img === 'alert.png' ? '440px' : undefined }}
+                />
+              )}
               {step.n === 1 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '12px' }}>
                   <input
@@ -133,7 +137,7 @@ export default function FrameOptimizationReport() {
                       onClick={handleStep1Reset}
                       style={{ cursor: 'pointer', fontSize: '13px', color: '#64748b', background: 'none', border: 'none', padding: '6px 4px', textDecoration: 'underline' }}
                     >
-                      Reset to default
+                      Remove photo
                     </button>
                   )}
                   <span style={{ fontSize: '12px', color: '#94a3b8' }}>
