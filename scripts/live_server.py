@@ -84,6 +84,33 @@ print(f"Loading YOLO model from {model_path}...")
 model = ultralytics.YOLO(model_path)
 print("Model loaded successfully.")
 
+# Experimental segmentation model (Plan B - see truck_seg/) for /api/detect_demo's box-vs-seg
+# comparison only. Loaded lazily, the first time someone actually picks "Segmentation" in the
+# Project Report demo, so a missing/not-yet-downloaded file can't slow down or crash startup of
+# the real live pipeline above. Drop the trained weights at SEG_MODEL_PATH to enable it.
+SEG_MODEL_PATH = os.environ.get("SEG_MODEL_PATH", str(base_dir / "models/model_seg_v1.pt"))
+_seg_model = None
+def _get_seg_model():
+    global _seg_model
+    if _seg_model is None:
+        if not os.path.exists(SEG_MODEL_PATH):
+            return None
+        print(f"Loading segmentation YOLO model from {SEG_MODEL_PATH}...")
+        _seg_model = ultralytics.YOLO(SEG_MODEL_PATH)
+        # Whatever this model's training run named class 0 ("Truck-Detection-qOuI" as
+        # trained) - it's still just a truck, and .plot() draws the class name straight
+        # onto the image verbatim. Renaming it here, once, at load time fixes the label
+        # everywhere this model is used (the demo page AND the live Seg toggle) with a
+        # single change. NOTE: YOLO.names is a read-only PROPERTY (returns a freshly
+        # revalidated copy via check_class_names() on every access, per ultralytics'
+        # source) - assigning to _seg_model.names[0] silently mutates a throwaway copy
+        # and never sticks. The real, persistent storage is the underlying nn.Module at
+        # .model.names; mutating that is what .names actually reads from each time.
+        if 0 in _seg_model.model.names:
+            _seg_model.model.names[0] = "truck"
+        print("Segmentation model loaded successfully.")
+    return _seg_model
+
 # --- ROI persistence + admin auth -----------------------------------------
 # The ROI used to live only in each browser's own localStorage, resent on connect and
 # otherwise invisible to anyone else - a different viewer's browser had nothing to
@@ -197,27 +224,23 @@ ROI_DEBOUNCE_SECONDS = ROI_DEBOUNCE_FRAMES / LIVE_FPS_ESTIMATE
 # detection in the 0.35-0.5 band was a genuine truck, none were cars/background, so there
 # was no accuracy cost to lowering it. Revisit if false-positive boxes start showing up.
 DETECTION_CONF = 0.4
+# The experimental seg_v1 model needs a separate, higher bar: measured on 400 real frames
+# of night footage (TV27CL1.mp4), conf=0.4 produced frequent low-confidence duplicate/
+# fragmented boxes (avg conf 0.58, up to 2 simultaneous boxes on what was actually one
+# truck, spurious hits on light glare on wet road) - raising to 0.6 cut detections from
+# 456 to 110 across those frames and dropped simultaneous-box count to 1, i.e. genuinely
+# removed the noise rather than also losing real trucks (spot-checked visually). Does not
+# touch DETECTION_CONF above, which stays exactly as tuned for the real production model.
+SEG_DETECTION_CONF = 0.6
 # cuda:0 on an NVIDIA box, mps on Apple silicon, else cpu; override with YOLO_DEVICE.
 DEVICE = pick_device()
 print(f"Inference device: {DEVICE}")
-#   2. its estimated speed is at least this. Set to 0.0 to flag ANY truck in
-#      the ROI regardless of speed (pure lane-restriction enforcement).
-SPEED_LIMIT_KMH = 0  # one global limit for all cameras (set from the UI); 0 = flag every truck in the ROI
-SPEED_LIMIT_MAX_KMH = 200
-SPEED_LIMIT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "speed_limit.json")
-
-def _load_speed_limit():
-    # Persisted so a server restart doesn't silently reset the limit to 0.
-    try:
-        with open(SPEED_LIMIT_FILE) as f:
-            value = float(json.load(f)["value"])
-        if 0 <= value <= SPEED_LIMIT_MAX_KMH:
-            return value
-    except (OSError, ValueError, KeyError, TypeError):
-        pass
-    return SPEED_LIMIT_KMH
-
-SPEED_LIMIT_KMH = _load_speed_limit()
+#   2. its estimated speed is at least this. 0.0 flags ANY truck in the ROI
+#      regardless of speed - pure lane-restriction enforcement, which is what
+#      Section 35 actually is (no speed threshold involved), so this is fixed
+#      rather than operator-adjustable (the old UI control and /api/speed_limit
+#      endpoint were removed - there was never a real reason to raise it above 0).
+SPEED_LIMIT_KMH = 0
 
 def highlight_violation(frame, bbox, dim=SNAPSHOT_DIM, pad=SNAPSHOT_DIM_PAD,
                          box_alpha=SNAPSHOT_BOX_ALPHA, box_beta=SNAPSHOT_BOX_BETA):
@@ -287,7 +310,7 @@ def send_telegram_alert(camera_id, speed, snapshot_path):
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
         
         # ပို့ချင်သော စာသား (Caption)
-        caption = f"🚨 Section 35 Violation Detected!\n📷 Camera: {camera_id}\n⚡ Speed: {speed:.1f} km/h\n⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        caption = f"Violation Detected!!\nCamera: {camera_id}\nSpeed: {speed:.1f} km/h\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         
         with open(snapshot_path, 'rb') as photo:
             files = {'photo': photo}
@@ -346,28 +369,6 @@ def save_violation_to_db(camera_id, violation_id, roi_polygon_json, snapshot_url
     except Exception as e:
         print(f"ERROR: MySQL Insert failed: {e}")
 
-class SpeedLimitRequest(BaseModel):
-    value: float
-
-@app.get("/api/speed_limit")
-async def get_speed_limit():
-    return {"value": SPEED_LIMIT_KMH, "max": SPEED_LIMIT_MAX_KMH}
-
-@app.post("/api/speed_limit")
-async def set_speed_limit(req: SpeedLimitRequest):
-    global SPEED_LIMIT_KMH
-    if not (0 <= req.value <= SPEED_LIMIT_MAX_KMH):
-        raise HTTPException(status_code=400, detail=f"Speed limit must be between 0 and {SPEED_LIMIT_MAX_KMH} km/h")
-    SPEED_LIMIT_KMH = req.value
-    try:
-        with open(SPEED_LIMIT_FILE, "w") as f:
-            json.dump({"value": SPEED_LIMIT_KMH}, f)
-    except OSError as e:
-        print(f"WARNING: could not persist speed limit: {e}")
-    print(f"Global speed limit set to {SPEED_LIMIT_KMH} km/h")
-    return {"value": SPEED_LIMIT_KMH}
-
-
 class AdminLoginRequest(BaseModel):
     username: str
     password: str
@@ -398,6 +399,101 @@ class AdminLogoutRequest(BaseModel):
 async def admin_logout(req: AdminLogoutRequest):
     admin_sessions.pop(req.token, None)
     return {"ok": True}
+
+class DetectDemoRequest(BaseModel):
+    image_base64: str
+    model: str = "box"  # "box" = production model_v6.pt, "seg" = experimental truck_seg model
+
+@app.post("/api/detect_demo")
+async def detect_demo(req: DetectDemoRequest):
+    import base64
+    import numpy as np
+    import cv2
+
+    header, encoded = req.image_base64.split(",", 1) if "," in req.image_base64 else ("", req.image_base64)
+    img_data = base64.b64decode(encoded)
+    np_arr = np.frombuffer(img_data, np.uint8)
+    frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+    if frame is None:
+        raise HTTPException(status_code=400, detail="Invalid image")
+
+    active_model = model
+    if req.model == "seg":
+        active_model = _get_seg_model()
+        if active_model is None:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Segmentation model not found at {SEG_MODEL_PATH}. Drop the trained "
+                       f"weights there (or set SEG_MODEL_PATH) and try again.",
+            )
+
+    # .plot() draws boxes for a detection model and filled masks + boxes for a segmentation
+    # one, automatically - same call either way, no branching needed here. Confidence bar
+    # differs per model - see SEG_DETECTION_CONF's definition.
+    demo_conf = SEG_DETECTION_CONF if req.model == "seg" else DETECTION_CONF
+    results = active_model.predict(source=frame, conf=demo_conf, iou=0.3, agnostic_nms=True, device=DEVICE, verbose=False)
+    res_frame = results[0].plot()
+
+    _, buffer = cv2.imencode('.jpg', res_frame)
+    b64_str = base64.b64encode(buffer).decode('utf-8')
+
+    # Pick the highest-confidence truck box (same class filter as the live pipeline) so
+    # the Project Report's "Estimate speed" step can anchor its track-point marker on the
+    # actual detected truck instead of a fixed, made-up screen position - same photo, real
+    # box, not a second illustration that happens to look similar. A segmentation model's
+    # .boxes are still populated the same way (segmentation is a superset, not a
+    # replacement), so this works unchanged for either model.
+    bbox = None
+    best_i = None  # referenced below (mask_ground_point) even when nothing was detected at all
+    result_boxes = results[0].boxes
+    if result_boxes is not None and len(result_boxes) > 0:
+        best_i, best_conf = None, -1.0
+        for i in range(len(result_boxes.cls)):
+            class_name = active_model.names[int(result_boxes.cls[i])]
+            conf = float(result_boxes.conf[i])
+            # The production model's classes are exactly "truck"/"heavy_truck". The
+            # experimental seg model (Plan B, trained via a merged Roboflow workspace) came
+            # back with an odd class 0 name ("Truck-Detection-qOuI") instead - it's still a
+            # truck-only model, so match loosely by substring for it rather than hardcoding
+            # that exact string (which could change on a re-train) or silently finding none.
+            is_truck = class_name in ["truck", "heavy_truck"] or (req.model == "seg" and "truck" in class_name.lower())
+            if is_truck and conf > best_conf:
+                best_i, best_conf = i, conf
+        if best_i is not None:
+            x1, y1, x2, y2 = result_boxes.xyxyn[best_i].tolist()
+            bbox = {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "conf": best_conf}
+
+    # Real body-vs-box ROI point: for a segmentation result, the truck's actual lowest mask
+    # pixel (not the bounding box's guessed bottom-center) - this is the whole point of
+    # comparing the two models, so the frontend can show it, not just describe it.
+    mask_ground_point = None
+    result_masks = results[0].masks
+    if req.model == "seg" and best_i is not None and result_masks is not None and best_i < len(result_masks.xyn):
+        poly = result_masks.xyn[best_i]  # normalized (x, y) polygon points for that instance
+        if len(poly) > 0:
+            lowest = max(poly, key=lambda pt: pt[1])
+            mask_ground_point = {"x": float(lowest[0]), "y": float(lowest[1])}
+
+    # Real re-ID fingerprint (Project Report step 7) - the exact same function
+    # save_violation_to_db() calls on a real violation (see reid_engine.get_fingerprint_from_frame),
+    # run here on the demo's own detected truck crop. Returns a genuine 512-d embedding; only a
+    # slice of it is sent back (a bar chart of all 512 values would be unreadable), but every
+    # value in that slice is real model output, not fabricated for display.
+    fingerprint = None
+    if best_i is not None and reid_engine.reid_session is not None:
+        x1p, y1p, x2p, y2p = result_boxes.xyxy[best_i].tolist()
+        fp_vector = reid_engine.get_fingerprint_from_frame(frame, (x1p, y1p, x2p, y2p))
+        if fp_vector:
+            fingerprint = {"dims": len(fp_vector), "sample": [round(v, 4) for v in fp_vector[:24]]}
+
+    return {
+        "result_image": f"data:image/jpeg;base64,{b64_str}",
+        "bbox": bbox,
+        "mask_ground_point": mask_ground_point,
+        "model_used": req.model,
+        "fingerprint": fingerprint,
+    }
 
 
 # Live-style overlay (mirrors LiveCCTVPlayer.jsx: green box + green label chip, translucent
@@ -916,6 +1012,7 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
 
                             # Box ပေါ်တွင်ပေါ်မည့် စာသား
                             box_label = "Tracking..." if speed_kmh is None else f"{speed_kmh:.1f} km/h"
+                            is_violation = False  # per-box, sent to the client so it can draw this one's border red
 
                             if roi_poly is not None:
                                 # Check bottom-center of the truck bounding box
@@ -938,6 +1035,7 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                                 )
 
                                 if confirmed:
+                                    is_violation = True
                                     violation_detected = True
                                     violating_bbox = (x1_pix, y1_pix, x2_pix, y2_pix)
                                     violating_speed_kmh = speed_kmh
@@ -987,7 +1085,8 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                                 "y2": float(coords[3]),
                                 "conf": conf,
                                 "track_id": track_id, # 🟢 client keys each box by this so velocity / label stay with the right vehicle
-                                "label": box_label # 🟢 React ဆီသို့ Speed ပါ ပို့ပေးမည်
+                                "label": box_label, # 🟢 React ဆီသို့ Speed ပါ ပို့ပေးမည်
+                                "violation": is_violation, # confirmed in the ROI - client draws this one's border red
                             })
 
                     # drop Kalman filters for tracks that left the frame (grace window
@@ -1029,6 +1128,221 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
         speed_estimator.reset_estimator(camera_id)
         alerted_track_ids.pop(camera_id, None)
         print(f"[{camera_id}] Connection state cleaned up")
+
+@app.websocket("/ws-test/{camera_id}")
+async def websocket_test_endpoint(websocket: WebSocket, camera_id: str):
+    """Read-only 'shadow' view for A/B-testing a model against a camera's REAL live feed:
+    ?model=box (default, same weights as production) or ?model=seg (experimental truck_seg).
+
+    Deliberately a separate, self-contained endpoint rather than a flag threaded through
+    websocket_endpoint above, because that function's per-camera state - _ESTIMATORS (keyed
+    by camera_id+frame size, shared across every connection to that camera), alerted_track_ids,
+    last_alert_times - is real, and its `finally:` block resets ALL of it on disconnect. A
+    shared-state version of this feature could reset a real Kalman filter mid-violation, or
+    have a closed test tab wipe the real alert dedup for that camera - both while the actual
+    production connection keeps running. This endpoint never touches any of that:
+      - its own model instance (own copy, not shared with any other connection)
+      - its own SpeedEstimator, constructed directly rather than via speed_estimator.get_estimator()
+        (which would hand back - and let this mutate - the real per-camera cached instance)
+      - its own local `seen_violations` set instead of the global alerted_track_ids
+      - the ROI is read once at connect (view-only; SET_LANE_ROI isn't handled here)
+      - NEVER writes to the violations DB, sends Telegram, or writes an evidence snapshot -
+        confirmed violations are only reported back over this socket (SHADOW_VIOLATION), so
+        this is safe to open at any time, including mid-exhibition, without affecting the real
+        production feed anyone else has open on the same camera.
+    """
+    await websocket.accept()
+    model_choice = websocket.query_params.get("model", "box")
+    is_seg = model_choice == "seg"
+
+    if is_seg:
+        test_model = _get_seg_model()
+        if test_model is None:
+            await websocket.send_json({
+                "type": "TEST_MODEL_UNAVAILABLE",
+                "detail": f"Segmentation model not found at {SEG_MODEL_PATH}.",
+            })
+            await websocket.close()
+            return
+    else:
+        test_model = YOLO(model_path)
+
+    print(f"[{camera_id}] TEST WebSocket opened (model={model_choice})")
+    roi_points = camera_rois.get(camera_id) or _load_rois().get(camera_id)
+    await websocket.send_json({"type": "CURRENT_ROI", "points": roi_points})
+
+    loop = asyncio.get_running_loop()
+    calib = speed_estimator._load_calibration().get(camera_id)
+    test_estimator = None  # built once the real frame size is known, just below
+    roi_enter_time = {}
+    prev_gray = None
+    opt_points = {}
+    seen_violations = set()  # local-only "first sight" dedup - never touches alerted_track_ids
+
+    try:
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                print(f"[{camera_id}] TEST WebSocket disconnected")
+                break
+            if "bytes" not in message or not message["bytes"]:
+                continue  # this view is read-only: no SET_LANE_ROI/calibration handling
+
+            np_arr = np.frombuffer(message["bytes"], np.uint8)
+            frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            if frame is None:
+                continue
+
+            h, w = frame.shape[:2]
+            curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            if test_estimator is None:
+                test_estimator = speed_estimator.SpeedEstimator(camera_id, w, h, calibration=calib)
+
+            start_time = time.time()
+            results = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    test_model.track, source=frame, conf=(SEG_DETECTION_CONF if is_seg else DETECTION_CONF), iou=0.3, agnostic_nms=True, device=DEVICE,
+                    verbose=False, persist=True, tracker=TRACKER_CFG,
+                ),
+            )
+            result = results[0]
+            boxes = []
+
+            roi_poly = None
+            if roi_points and len(roi_points) >= 3:
+                pts = [[int(pt['x'] * w), int(pt['y'] * h)] for pt in roi_points]
+                roi_poly = np.array(pts, dtype=np.int32)
+
+            if result.boxes is not None:
+                track_ids = result.boxes.id.cpu().numpy() if result.boxes.id is not None else []
+                current_time_sec = time.time()
+
+                for i in range(len(result.boxes.cls)):
+                    class_name = test_model.names[int(result.boxes.cls[i])]
+                    # See detect_demo's identical comment: the seg model's real truck class
+                    # came back oddly named, so match loosely by substring for it only.
+                    if not (class_name in ["truck", "heavy_truck"] or (is_seg and "truck" in class_name.lower())):
+                        continue
+
+                    coords = result.boxes.xyxyn[i].cpu().numpy()
+                    conf = float(result.boxes.conf[i])
+                    track_id = int(track_ids[i]) if i < len(track_ids) else -1
+                    x1_pix, y1_pix = int(coords[0] * w), int(coords[1] * h)
+                    x2_pix, y2_pix = int(coords[2] * w), int(coords[3] * h)
+
+                    # This is the actual point of testing segmentation, not just swapping
+                    # weights: the box model's "ground point" can only ever be the axis-
+                    # aligned box's bottom-center - it doesn't know the truck's real shape.
+                    # For the seg model, approximate the two near-side WHEEL contact points
+                    # instead of one body-center point: take the mask's bottom edge (its
+                    # lowest ~3% band) and use that band's leftmost and rightmost points.
+                    # A wide/angled truck can have one wheel inside the restricted lane and
+                    # the other outside it - checking a single center point (of the box OR
+                    # the mask) can miss that; checking both wheel points can't. Kept to two
+                    # points rather than the full mask polygon because it's simpler, doesn't
+                    # need a new dependency (Shapely) for real polygon-vs-polygon overlap, and
+                    # covers the case that actually matters for a lane boundary. Box mode is
+                    # untouched here on purpose - it must keep matching real production
+                    # exactly, or this stops being a fair baseline to compare seg against.
+                    ground_point = ((x1_pix + x2_pix) / 2.0, float(y2_pix))  # box default
+                    seg_wheel_points = None  # (left, right) - seg mode only
+                    if is_seg and result.masks is not None and i < len(result.masks.xyn):
+                        poly = result.masks.xyn[i]  # normalized (x, y) polygon points for this instance
+                        if len(poly) > 0:
+                            y_bottom = max(pt[1] for pt in poly)
+                            band = [pt for pt in poly if pt[1] >= y_bottom - 0.03] or [max(poly, key=lambda p: p[1])]
+                            left_pt = min(band, key=lambda p: p[0])
+                            right_pt = max(band, key=lambda p: p[0])
+                            seg_wheel_points = (
+                                (float(left_pt[0]) * w, float(left_pt[1]) * h),
+                                (float(right_pt[0]) * w, float(right_pt[1]) * h),
+                            )
+                            # Speed still tracks one point (adding a second doesn't improve a
+                            # velocity estimate, just doubles the optical-flow/Kalman work) -
+                            # the midpoint of the two wheel points is that one point.
+                            ground_point = (
+                                (seg_wheel_points[0][0] + seg_wheel_points[1][0]) / 2.0,
+                                (seg_wheel_points[0][1] + seg_wheel_points[1][1]) / 2.0,
+                            )
+
+                    opt_point = None
+                    raw_center = ground_point
+                    if track_id != -1 and prev_gray is not None and track_id in opt_points:
+                        p0 = np.array([[opt_points[track_id]]], dtype=np.float32)
+                        p1, st, _ = cv2.calcOpticalFlowPyrLK(prev_gray, curr_gray, p0, None, winSize=(15, 15), maxLevel=2, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
+                        if st[0][0] == 1:
+                            nx, ny = p1[0][0]
+                            if x1_pix <= nx <= x2_pix and y1_pix <= ny <= y2_pix and abs(ny - y2_pix) < (y2_pix - y1_pix) * 0.2:
+                                opt_point = (float(nx), float(ny))
+                    if opt_point is None:
+                        opt_point = raw_center
+                    if track_id != -1:
+                        opt_points[track_id] = opt_point
+
+                    speed_kmh = test_estimator.update(track_id, (x1_pix, y1_pix, x2_pix, y2_pix), current_time_sec, opt_point=opt_point)
+                    box_label = "Tracking..." if speed_kmh is None else f"{speed_kmh:.1f} km/h"
+
+                    is_violation = False
+                    if roi_poly is not None:
+                        if seg_wheel_points is not None:
+                            # Either wheel touching the restricted lane counts - not just
+                            # one designated point.
+                            in_roi = any(
+                                cv2.pointPolygonTest(roi_poly, (int(px), int(py)), False) >= 0
+                                for px, py in seg_wheel_points
+                            )
+                        else:
+                            wheel_point = (int(ground_point[0]), int(ground_point[1]))
+                            in_roi = cv2.pointPolygonTest(roi_poly, wheel_point, False) >= 0
+                        if track_id != -1:
+                            if in_roi:
+                                roi_enter_time.setdefault(track_id, current_time_sec)
+                            else:
+                                roi_enter_time.pop(track_id, None)
+                        over_limit = SPEED_LIMIT_KMH <= 0 or (speed_kmh is not None and speed_kmh >= SPEED_LIMIT_KMH)
+                        confirmed = (
+                            in_roi and track_id != -1 and track_id in roi_enter_time
+                            and current_time_sec - roi_enter_time[track_id] >= ROI_DEBOUNCE_SECONDS
+                            and over_limit
+                        )
+                        if confirmed:
+                            is_violation = True
+                            if track_id not in seen_violations:
+                                seen_violations.add(track_id)
+                                await websocket.send_json({
+                                    "type": "SHADOW_VIOLATION",
+                                    "camera": camera_id,
+                                    "model": model_choice,
+                                    "speed_kmh": speed_kmh,
+                                })
+
+                    boxes.append({
+                        "x1": float(coords[0]), "y1": float(coords[1]),
+                        "x2": float(coords[2]), "y2": float(coords[3]),
+                        "conf": conf, "track_id": track_id, "label": box_label,
+                        "violation": is_violation,
+                    })
+
+                test_estimator.cleanup(track_ids, now=current_time_sec)
+                live_ids = {int(t) for t in track_ids}
+                for tid in [t for t in roi_enter_time if t not in live_ids]:
+                    del roi_enter_time[tid]
+
+            prev_gray = curr_gray
+            elapsed = time.time() - start_time
+            await websocket.send_json({
+                "type": "BBOX_DATA",
+                "boxes": boxes,
+                "fps": (1.0 / elapsed) if elapsed > 0 else 0.0,
+                "model": model_choice,
+            })
+    except WebSocketDisconnect:
+        print(f"[{camera_id}] TEST WebSocket disconnected")
+    except Exception:
+        print(f"[{camera_id}] Error in TEST WebSocket loop:\n{traceback.format_exc()}")
+    # No finally-block cleanup needed: nothing shared/global was ever touched above.
+
 
 if __name__ == "__main__":
     import uvicorn

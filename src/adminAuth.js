@@ -72,3 +72,38 @@ export function adminLogout() {
     }).catch(() => {}); // best effort - the client-side session is already cleared either way
   }
 }
+
+// One shared login MODAL for every camera card, not one copy per card. Previously each
+// LiveCCTVPlayer owned its own showAdminLogin/username/password state and rendered its own
+// modal, so in the grid view, clicking "Edit ROI" on two cameras opened two separate sign-in
+// popups even though there's only ever one admin session underneath (a login on card A
+// already updates getAdminToken() for card B too - it's the MODAL that was duplicated, not
+// the session). AdminLoginModal.jsx renders the one real modal, once, at the App level;
+// any component calls requestAdminLogin() to open it and gets its onSuccess callback run
+// once sign-in succeeds - or, if already signed in, onSuccess runs immediately, no modal.
+let pendingRequest = null; // { onSuccess, contextLabel } | null
+const requestListeners = new Set();
+
+function setPendingRequest(next) {
+  pendingRequest = next;
+  requestListeners.forEach((l) => l());
+}
+
+export function useAdminLoginRequest() {
+  return useSyncExternalStore(
+    (cb) => { requestListeners.add(cb); return () => requestListeners.delete(cb); },
+    () => pendingRequest,
+  );
+}
+
+// contextLabel: shown in the modal, e.g. "the restricted-lane region for TV03CL2".
+export function requestAdminLogin(onSuccess, contextLabel) {
+  if (getAdminToken()) { onSuccess(); return; } // already signed in - skip the modal entirely
+  setPendingRequest({ onSuccess, contextLabel });
+}
+
+// Called by AdminLoginModal on Cancel, or right after a successful sign-in (once it has
+// already run the pending request's onSuccess itself).
+export function clearAdminLoginRequest() {
+  setPendingRequest(null);
+}

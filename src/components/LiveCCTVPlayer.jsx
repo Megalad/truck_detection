@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import { demoClipExists, demoClipUrl, useReplayMode } from '../replay';
-import { adminLogin, adminLogout, getAdminToken, useAdminSession } from '../adminAuth';
+import { adminLogout, getAdminToken, useAdminSession, requestAdminLogin } from '../adminAuth';
 
 const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
   // Live <video> plays at full rate; a transparent canvas on top redraws
@@ -35,8 +35,10 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
   // Add custom event listener for external ROI toggle from kebab menu
   useEffect(() => {
     const handler = () => {
-      if (!getAdminToken()) { setShowAdminLogin(true); return; }
-      setIsEditingRoi(prev => !prev);
+      // Already signed in: requestAdminLogin runs this immediately, no modal shown - see
+      // its comment in adminAuth.js for why the modal itself is now a single shared
+      // component instead of one copy per camera card.
+      requestAdminLogin(() => setIsEditingRoi(prev => !prev), cameraId);
     };
     const handleCalibrate = () => {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -72,18 +74,29 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
 
   // Admin session gate for actually CHANGING the ROI - see adminAuth.js. Any viewer sees
   // the ROI (pushed by the server below, CURRENT_ROI); only a signed-in admin can move it.
+  // The sign-in modal itself is a single shared component (AdminLoginModal, rendered once
+  // in App.jsx) - see requestAdminLogin's use above, not local state/JSX here anymore.
   useAdminSession(); // re-render this component when login/logout happens elsewhere
-  const [showAdminLogin, setShowAdminLogin] = useState(false);
-  const [loginUsername, setLoginUsername] = useState('admin');
-  const [loginPassword, setLoginPassword] = useState('');
-  const [loginError, setLoginError] = useState('');
-  const [loginBusy, setLoginBusy] = useState(false);
   
   const [isManualCalibrating, setIsManualCalibrating] = useState(false);
   const [manualCalibPoints, setManualCalibPoints] = useState([]);
   const [manualWidth, setManualWidth] = useState("3.5");
   const [manualLength, setManualLength] = useState("27.0");
   
+  // Admin-only box-vs-segmentation shadow toggle (see websocket_test_endpoint in
+  // live_server.py). "box" connects to the real /ws/{cameraId} (unchanged, always safe).
+  // "seg" connects to the separate, isolated /ws-test/{cameraId}?model=seg instead - it
+  // never touches the real production Kalman filters / alert dedup / DB / Telegram, so
+  // switching this can't affect what anyone else watching this camera sees.
+  const [overlayModel, setOverlayModel] = useState('box');
+  const [testModelUnavailable, setTestModelUnavailable] = useState(false);
+  // drawBoxes runs inside a rAF loop set up once (see the `[]`-deps effect below), so it
+  // can't see later re-renders' state directly - same reason latestBoxesRef exists. Mirror
+  // overlayModel into a ref so the loop always reads its current value, not the one from
+  // whichever render happened to be live when that effect first ran.
+  const overlayModelRef = useRef('box');
+  useEffect(() => { overlayModelRef.current = overlayModel; }, [overlayModel]);
+
   const [normalizedPointsState, setNormalizedPointsState] = useState([]);
   const [calibrationStatus, setCalibrationStatus] = useState(null); // 'started', 'done', 'failed'
   const [calibrationImageUrl, setCalibrationImageUrl] = useState(null);
@@ -170,7 +183,8 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
     const connectWebSocket = () => {
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsHost = window.location.hostname === 'localhost' ? 'localhost:8000' : window.location.host;
-      const wsUrl = `${wsProtocol}//${wsHost}/ws/${cameraId}`;
+      const wsPath = overlayModel === 'seg' ? `/ws-test/${cameraId}?model=seg` : `/ws/${cameraId}`;
+      const wsUrl = `${wsProtocol}//${wsHost}${wsPath}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -263,6 +277,22 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
             return;
           }
 
+          if (data.type === 'TEST_MODEL_UNAVAILABLE') {
+            setTestModelUnavailable(true);
+            setOverlayModel('box'); // fall back so the view doesn't just sit dark
+            return;
+          }
+
+          if (data.type === 'SHADOW_VIOLATION') {
+            // Never a real filed violation (no DB row, no Telegram, no evidence file - see
+            // websocket_test_endpoint) - tagged unmistakably so it's never mistaken for one.
+            if (onViolationAlert) {
+              const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              onViolationAlert(`🧪 [TEST - segmentation, not filed] Would have flagged a violation on ${cameraId} at ${timeStr}`);
+            }
+            return;
+          }
+
           // Data အမျိုးအစားခွဲခြားခြင်း
           let boxesToDraw = [];
 
@@ -315,7 +345,7 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
       if (video && replay) { video.removeAttribute('src'); video.load(); }
       if (wsRef.current) wsRef.current.close();
     };
-  }, [streamUrl, cameraId, replay]);
+  }, [streamUrl, cameraId, replay, overlayModel]);
 
   // Draw the given boxes onto the overlay canvas, mapping normalized
   // (full-frame) coords through the same object-fit: cover crop the <video>
@@ -382,14 +412,18 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
       const x2 = dx + rx2 * dw;
       const y2 = dy + ry2 * dh;
 
-      ctx.strokeStyle = '#22c55e'; // Tailwind Green 500
+      // Violation (either pipeline) always reads red; otherwise green for the real
+      // production overlay, purple for the experimental segmentation test view - so it's
+      // visually obvious which one is on screen, never mistaken for the real feed.
+      const boxColor = box.violation ? '#ef4444' : (overlayModelRef.current === 'seg' ? '#a855f7' : '#22c55e');
+      ctx.strokeStyle = boxColor;
       ctx.lineWidth = 2;
       ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
       if (box.label) {
         const textWidth = ctx.measureText(box.label).width;
         const ly = Math.max(14, y1);
-        ctx.fillStyle = '#22c55e';
+        ctx.fillStyle = boxColor;
         ctx.fillRect(x1, ly - 14, textWidth + 10, 14);
         ctx.fillStyle = 'white';
         ctx.fillText(box.label, x1 + 5, ly - 3);
@@ -592,9 +626,11 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
         ))}
       </svg>
 
-      {/* ROI Controls */}
-      {/* ROI Controls */}
-      <div style={{ position: 'absolute', top: '12px', right: '12px', zIndex: 20, display: 'flex', gap: '8px' }}>
+      {/* ROI Controls. flexWrap + maxWidth/justifyContent: on a narrow phone-width card this
+          wraps onto a second line and never grows past the card's edge, instead of overflowing
+          or getting clipped by the parent's overflow:hidden (both real failure modes here,
+          since this row can share the card with the model toggle below at the same time). */}
+      <div style={{ position: 'absolute', top: '12px', right: '12px', zIndex: 20, display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: '8px', maxWidth: 'calc(100% - 24px)' }}>
         {isEditingRoi && (
           <>
             <button
@@ -620,64 +656,39 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
         )}
       </div>
 
-      {/* Admin sign-in - shown when "Edit ROI" is clicked without a valid admin session.
-          Anyone can VIEW the ROI (pushed by the server, see CURRENT_ROI above); only a
-          signed-in admin can move it - see scripts/live_server.py's /api/admin/login. */}
-      {showAdminLogin && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <form
-            className="bg-white rounded-xl shadow-2xl p-6 max-w-xs w-full"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              setLoginBusy(true);
-              setLoginError('');
-              try {
-                await adminLogin(loginUsername, loginPassword);
-                setShowAdminLogin(false);
-                setLoginPassword('');
-                setIsEditingRoi(true);
-              } catch (err) {
-                setLoginError(err.message || 'Login failed.');
-              } finally {
-                setLoginBusy(false);
-              }
-            }}
-          >
-            <h3 className="text-lg font-bold text-gray-900 mb-1">Admin sign-in</h3>
-            <p className="text-gray-500 text-sm mb-4">Required to edit the restricted-lane region for {cameraId}.</p>
-            <label className="block text-xs font-medium text-gray-700 mb-1">Username</label>
-            <input
-              type="text"
-              value={loginUsername}
-              onChange={(e) => setLoginUsername(e.target.value)}
-              className="w-full px-3 py-2 mb-3 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-amber-500"
-              autoFocus
-            />
-            <label className="block text-xs font-medium text-gray-700 mb-1">Password</label>
-            <input
-              type="password"
-              value={loginPassword}
-              onChange={(e) => setLoginPassword(e.target.value)}
-              className="w-full px-3 py-2 mb-3 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-amber-500"
-            />
-            {loginError && <p className="text-red-600 text-xs mb-3">{loginError}</p>}
-            <div className="flex gap-2">
+      {/* Admin-only box-vs-segmentation shadow toggle (see the overlayModel/websocket_test_endpoint
+          comments above). Anyone else watching this camera keeps seeing the real /ws feed
+          untouched, whether or not an admin elsewhere has this switched to "Seg". */}
+      {getAdminToken() && (
+        <div style={{ position: 'absolute', top: '12px', left: '12px', zIndex: 20, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '4px', maxWidth: 'calc(100% - 24px)' }}>
+          {/* flexWrap: the "Segmentation (experimental)" label is long enough that on a
+              narrow phone-width card this can genuinely need two lines - wrapping beats
+              the alternative (overflowing past the card, or the ROI controls row on the
+              opposite corner colliding with it when both are visible at once). */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: '6px', padding: '2px', gap: '2px' }}>
+            {[
+              { id: 'box', label: 'Bounding Box' },
+              { id: 'seg', label: 'Segmentation' },
+            ].map((opt) => (
               <button
-                type="button"
-                onClick={() => { setShowAdminLogin(false); setLoginError(''); }}
-                className="flex-1 py-2 px-3 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm font-medium"
+                key={opt.id}
+                onClick={() => { setTestModelUnavailable(false); setOverlayModel(opt.id); }}
+                title={opt.id === 'seg' ? "Experimental - own isolated connection, doesn't affect the real production feed or file real violations" : 'The real production model'}
+                style={{
+                  padding: '4px 10px', borderRadius: '4px', border: 'none', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                  backgroundColor: overlayModel === opt.id ? (opt.id === 'seg' ? '#a855f7' : '#22c55e') : 'transparent',
+                  color: overlayModel === opt.id ? '#fff' : '#d1d5db',
+                }}
               >
-                Cancel
+                {opt.label}
               </button>
-              <button
-                type="submit"
-                disabled={loginBusy}
-                className="flex-1 py-2 px-3 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-lg transition-colors text-sm font-semibold"
-              >
-                {loginBusy ? 'Signing in...' : 'Sign in'}
-              </button>
-            </div>
-          </form>
+            ))}
+          </div>
+          {testModelUnavailable && (
+            <span style={{ fontSize: '11px', color: '#fca5a5', backgroundColor: 'rgba(0,0,0,0.7)', padding: '3px 8px', borderRadius: '4px' }}>
+              Segmentation model not found on the server - see models/model_seg_v1.pt
+            </span>
+          )}
         </div>
       )}
 

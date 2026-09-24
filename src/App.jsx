@@ -7,8 +7,8 @@ import ProjectReport from "./components/ProjectReport";
 import ReportCharts from "./components/ReportCharts";
 import ViewToggle from "./components/ViewToggle";
 import FocusView from "./components/FocusView";
-import SpeedLimitControl from "./components/SpeedLimitControl";
 import ReplayToggle from "./components/ReplayToggle";
+import AdminLoginModal from "./components/AdminLoginModal";
 import { adminLogout, useAdminSession } from "./adminAuth";
 
 const VideoCard = ({ cam, idx, setActiveCameraIndex, setCurrentView, handleViolationAlert }) => {
@@ -105,17 +105,19 @@ function LiveMonitoringView() {
 
   return (
     <section>
-      <div className="flex justify-between items-center mb-6">
+      {/* flex-wrap + gap-y: heading + 3 controls in one unwrapped row was a real overflow
+          risk on a narrow phone (nothing here could ever reflow); wrapping lets the controls
+          drop to their own row under the heading instead. */}
+      <div className="flex flex-wrap justify-between items-center gap-x-4 gap-y-3 mb-6">
         <h2 className="text-xl font-bold text-gray-900">Live Camera Feeds</h2>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <ReplayToggle />
-          <SpeedLimitControl />
           {currentView === 'grid' && (
             <div className="flex items-center gap-2 bg-gray-100 rounded-full p-1 border border-gray-200 shadow-inner">
               <button
                 onClick={() => setVisibleCameraCount((c) => Math.max(MIN_GRID_CAMERAS, c - 1))}
                 disabled={visibleCameraCount <= MIN_GRID_CAMERAS}
-                className="w-8 h-8 flex items-center justify-center rounded-full text-gray-600 hover:bg-white hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="w-10 h-10 flex items-center justify-center rounded-full text-gray-600 hover:bg-white hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 title="Show fewer cameras"
               >
                 &minus;
@@ -126,7 +128,7 @@ function LiveMonitoringView() {
               <button
                 onClick={() => setVisibleCameraCount((c) => Math.min(MAX_GRID_CAMERAS, c + 1))}
                 disabled={visibleCameraCount >= MAX_GRID_CAMERAS}
-                className="w-8 h-8 flex items-center justify-center rounded-full text-gray-600 hover:bg-white hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="w-10 h-10 flex items-center justify-center rounded-full text-gray-600 hover:bg-white hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 title="Show more cameras"
               >
                 +
@@ -332,8 +334,11 @@ function EvidenceHistoryView() {
         </button>
       </div>
 
-      {/* Table Container */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      {/* Table Container. overflow-x-auto: a 6-column table can't reflow to a narrow
+          screen the way flex/grid layouts can - the standard, safe fix is letting it
+          scroll horizontally within its own box (swipe to see the rest) rather than
+          overflowing the page or squishing every column unreadably thin. */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-x-auto overflow-y-hidden">
         <table className="w-full text-left border-collapse">
           <thead className="bg-gray-50 text-gray-500 text-xs font-semibold uppercase border-b border-gray-200">
             <tr>
@@ -468,6 +473,9 @@ export default function App() {
 
   return (
     <>
+      {/* One shared sign-in modal for the whole app - see adminAuth.js's requestAdminLogin
+          for why this replaced a separate copy inside every LiveCCTVPlayer instance. */}
+      <AdminLoginModal />
       <header className="flex flex-wrap justify-between items-end gap-x-6 gap-y-2 px-4 sm:px-8 pt-6 bg-white shadow-sm border-b border-gray-200">
         <div className="flex flex-col gap-1 pb-5">
           <span className="text-amber-600 text-xs font-bold uppercase tracking-wider">By Team Unique</span>

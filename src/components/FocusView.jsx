@@ -43,12 +43,14 @@ const FocusView = ({
 
   return (
     <div className="flex flex-col bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-2xl relative max-w-7xl mx-auto my-8">
-      {/* Top Bar: Title & Dropdown */}
-      <div className="flex justify-between items-center bg-white px-6 py-4 border-b border-gray-200">
+      {/* Top Bar: Title & Dropdown. flex-wrap: title + "Select Camera" label + dropdown +
+          menu in one unwrapped row is the same overflow risk fixed elsewhere this pass -
+          a long camera title plus the dropdown easily exceeds a phone's width. */}
+      <div className="flex flex-wrap justify-between items-center gap-x-4 gap-y-2 bg-white px-6 py-4 border-b border-gray-200">
         <h2 className="text-gray-900 text-xl font-bold tracking-wide">
           {activeCamera.title}
         </h2>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <label className="text-gray-500 text-sm font-medium">Select Camera:</label>
           <select
             className="bg-white text-gray-900 border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-colors shadow-sm"
@@ -66,7 +68,11 @@ const FocusView = ({
           <div className="relative ml-2" ref={menuRef}>
             <button
               onClick={() => setIsMenuOpen(!isMenuOpen)}
-              className="text-gray-500 hover:text-gray-900 p-1 rounded-md hover:bg-gray-100 transition-colors"
+              // p-2.5 (not the old p-1): a 4px-padding/20px-icon button is only a ~28px tap
+              // target, well under the ~40-44px baseline touch guidelines call for (Apple
+              // HIG/Material) - this is the one menu that reaches ROI editing/calibration,
+              // worth being reliably tappable on a phone.
+              className="text-gray-500 hover:text-gray-900 p-2.5 rounded-md hover:bg-gray-100 transition-colors"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="1"></circle>
