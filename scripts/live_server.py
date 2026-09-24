@@ -202,7 +202,10 @@ SNAPSHOT_BOX_BETA = 0     # brightness boost applied to the truck itself
 #   1. the middle of its box's bottom edge (≈ tyre-contact point) stays inside
 #      the ROI polygon for this many consecutive frames (debounce vs. detector
 #      jitter - one noisy frame no longer fires an alert), and
-ROI_DEBOUNCE_FRAMES = 15
+# 0 = no debounce: flag on the first frame the tyre point is inside the ROI (live: 0s;
+# recorded playback still needs that 1 frame - see debounce_frames' max(1, ...)).
+# Was 15 (~1.5s); raise it again if single-frame detector jitter causes false alerts.
+ROI_DEBOUNCE_FRAMES = 0
 # Live monitoring analyses the ~640px-wide frames the browser sends, at roughly this many
 # per second. Recorded playback reproduces that: same frame size, and a debounce of the
 # same duration (see process_recorded). Tune LIVE_FPS_ESTIMATE if live runs faster/slower.
