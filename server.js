@@ -1,3 +1,13 @@
+/**
+ * Node server: serves the built React app and the lightweight REST routes.
+ *
+ *   GET /camera.json            master CCTV list (metadata for the camera info panel)
+ *   GET /api/health             database connectivity check
+ *   GET /api/violations         violation records for Evidence & History and the charts
+ *   GET /cctv/:cameraId/:file   same-origin proxy for the cameras' HTTP-only HLS streams
+ *
+ * Detection, ROI and admin routes live in the Python server (scripts/live_server.py).
+ */
 import express from "express";
 import fs from "node:fs";
 import http from "node:http";
@@ -15,12 +25,9 @@ const calibrationPath = path.join(__dirname, "public", "calibration_results");
 app.use(express.json());
 app.use("/calibration_results", express.static(calibrationPath));
 
-// The org's master CCTV list (112 cameras) - src/cameras.js's curated subset is derived from
-// it, and FocusView reads it directly for each camera's route/km/coordinates metadata. It's a
-// repo-root file, not in public/, so Vite's build doesn't pick it up automatically - serve it
-// explicitly (and before the SPA catch-all below, or that would swallow this route and hand
-// back index.html instead - which is exactly what was happening: a 200 of HTML, not JSON, so
-// the fetch silently failed and "Loading camera details from JSON..." never went away).
+// Master CCTV list (112 cameras); src/cameras.js is a curated subset of it. It lives at the
+// repo root rather than public/, so it is served explicitly - and must be registered before
+// the SPA catch-all below, which would otherwise answer with index.html.
 const cameraJsonPath = path.join(__dirname, "camera.json");
 app.get("/camera.json", (_request, response) => {
   if (!fs.existsSync(cameraJsonPath)) {
@@ -62,20 +69,12 @@ app.get("/api/violations", async (request, response) => {
   }
 });
 
-// CCTV proxy: the camera servers are plain HTTP (http://1.4.213.19:...). Fetching that
-// directly from the browser works fine when the page itself is loaded over HTTP, but once
-// the site is reached over HTTPS (e.g. https://dodovision.me via Cloudflare) browsers
-// silently block it as "mixed content" - the <video> just never loads, no visible error.
-// Routing the stream through this same-origin endpoint instead fixes that for both cases.
+// CCTV proxy. The camera servers are plain HTTP, which browsers block as mixed content on
+// an HTTPS page, so streams are relayed through this same-origin route.
 //
-// Every camera's HLS playlist/segment references the next file by a bare relative filename
-// (checked against the live streams; no absolute URLs anywhere in them), so the browser
-// resolves "chunklist_x.m3u8" or "media_x_1.ts" against wherever it fetched the current file
-// from - meaning this one route, unmodified, transparently serves the master playlist, the
-// sub-playlist it points to, AND the .ts segments the sub-playlist points to. No playlist
-// rewriting needed. cameraBaseUrls comes from src/cameras.js (the same list the Live
-// Monitoring grid uses), so this can only ever proxy a camera already on that list, not an
-// arbitrary host - it's not an open proxy.
+// HLS playlists reference their sub-playlists and .ts segments by relative filename, so this
+// one route serves all three without rewriting. Only cameras listed in src/cameras.js can be
+// proxied (it is not an open proxy).
 const cameraBaseUrls = Object.fromEntries(
   CAMERAS.filter((c) => c.url.endsWith("playlist.m3u8")).map((c) => [c.id, c.url.slice(0, -"playlist.m3u8".length)])
 );
@@ -92,7 +91,9 @@ app.get("/cctv/:cameraId/:file", (request, response) => {
     return;
   }
 
-  const upstreamReq = http.get(base + request.params.file, { timeout: 8000 }, (upstreamRes) => {
+  // `timeout` is the maximum silence (no bytes received), not total time. Segments are ~10s
+  // of video and the camera server often takes 10-15s to deliver one, with pauses.
+  const upstreamReq = http.get(base + request.params.file, { timeout: 20000 }, (upstreamRes) => {
     if (upstreamRes.statusCode !== 200) {
       response.status(502).end("Camera stream unavailable");
       upstreamRes.resume();
@@ -103,8 +104,7 @@ app.get("/cctv/:cameraId/:file", (request, response) => {
       upstreamRes.headers["content-type"] ||
         (request.params.file.endsWith(".ts") ? "video/mp2t" : "application/vnd.apple.mpegurl")
     );
-    // Playlists and segments are both short-lived (a live stream, not a fixed asset) -
-    // never let the browser/CDN reuse a stale one.
+    // Live playlists and segments change constantly: never cache them.
     response.setHeader("Cache-Control", "no-store");
     upstreamRes.pipe(response);
   });
@@ -112,6 +112,11 @@ app.get("/cctv/:cameraId/:file", (request, response) => {
   upstreamReq.on("error", (error) => {
     console.error(`[cctv-proxy] ${request.params.cameraId}/${request.params.file}:`, error.message);
     if (!response.headersSent) response.status(502).end("Camera stream unreachable");
+    else response.destroy(); // failed mid-segment: abort so the player retries instead of hanging
+  });
+  // Viewer left (camera switched, tab closed): stop the download to save upstream bandwidth.
+  response.on("close", () => {
+    if (!response.writableFinished) upstreamReq.destroy();
   });
 });
 

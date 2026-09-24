@@ -1,7 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import { demoClipExists, demoClipUrl, useReplayMode } from '../replay';
+import { pushAlert } from '../alerts';
+import { setOverlayModel as setOverlayModelFor, useOverlayModel } from '../overlayModel';
 import { adminLogout, getAdminToken, useAdminSession, requestAdminLogin } from '../adminAuth';
+
+/**
+ * One camera tile: plays the camera's HLS stream (or its replay clip), sends frames to the
+ * Python server over a WebSocket, and draws the returned truck boxes and the camera's ROI.
+ * Admins can edit the ROI and run speed calibration from here.
+ */
+
+// Live-stream fallback timing (see the autoReplay effect and the start/stall checks below).
+const STREAM_START_TIMEOUT_MS = 30000; // no picture yet after this -> replay
+const STREAM_STALL_TIMEOUT_MS = 30000; // picture frozen this long -> replay
+const LIVE_RETRY_MS = 120000;          // auto-replay retries the live stream after this
 
 const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
   // Live <video> plays at full rate; a transparent canvas on top redraws
@@ -27,6 +40,14 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
   }, [cameraId]);
   const replay = (forcedReplay || autoReplay) && clipOk === true;
 
+  // An automatic fallback is temporary: after LIVE_RETRY_MS, try the live stream again
+  // (if it's still down, the start/stall checks below just fall back again).
+  useEffect(() => {
+    if (!autoReplay || forcedReplay) return undefined;
+    const t = setTimeout(() => setAutoReplay(false), LIVE_RETRY_MS);
+    return () => clearTimeout(t);
+  }, [autoReplay, forcedReplay]);
+
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const wsRef = useRef(null);
@@ -40,24 +61,17 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
       // component instead of one copy per camera card.
       requestAdminLogin(() => setIsEditingRoi(prev => !prev), cameraId);
     };
-    const handleCalibrate = () => {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: "TRIGGER_CALIBRATION", stream_url: streamUrl }));
-      }
-    };
     const handleManualCalibrate = () => {
       setIsManualCalibrating(true);
       setManualCalibPoints([]);
     };
     window.addEventListener(`toggle-roi-${cameraId}`, handler);
-    window.addEventListener(`trigger-calibrate-${cameraId}`, handleCalibrate);
     window.addEventListener(`trigger-manual-calibrate-${cameraId}`, handleManualCalibrate);
     return () => {
       window.removeEventListener(`toggle-roi-${cameraId}`, handler);
-      window.removeEventListener(`trigger-calibrate-${cameraId}`, handleCalibrate);
       window.removeEventListener(`trigger-manual-calibrate-${cameraId}`, handleManualCalibrate);
     };
-  }, [cameraId, streamUrl]);
+  }, [cameraId]);
 
   const aiCanvasRef = useRef(null);       // reused downscaled canvas -> JPEG to server
   const latestBoxesRef = useRef([]);      // last batch of boxes received; the rAF loop eases toward these
@@ -88,7 +102,9 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
   // "seg" connects to the separate, isolated /ws-test/{cameraId}?model=seg instead - it
   // never touches the real production Kalman filters / alert dedup / DB / Telegram, so
   // switching this can't affect what anyone else watching this camera sees.
-  const [overlayModel, setOverlayModel] = useState('box');
+  // Shared per-camera store, so the ⋮ menu, the on-video toggle and the SEG TEST badge agree.
+  const overlayModel = useOverlayModel(cameraId);
+  const setOverlayModel = (model) => setOverlayModelFor(cameraId, model);
   const [testModelUnavailable, setTestModelUnavailable] = useState(false);
   // drawBoxes runs inside a rAF loop set up once (see the `[]`-deps effect below), so it
   // can't see later re-renders' state directly - same reason latestBoxesRef exists. Mirror
@@ -98,11 +114,7 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
   useEffect(() => { overlayModelRef.current = overlayModel; }, [overlayModel]);
 
   const [normalizedPointsState, setNormalizedPointsState] = useState([]);
-  const [calibrationStatus, setCalibrationStatus] = useState(null); // 'started', 'done', 'failed'
-  const [calibrationImageUrl, setCalibrationImageUrl] = useState(null);
-  const [calibImageAttempt, setCalibImageAttempt] = useState(0); // bumped to force a retry fetch
-  const [calibImageFailed, setCalibImageFailed] = useState(false);
-  const CALIB_IMAGE_MAX_RETRIES = 3;
+  const [calibrationStatus, setCalibrationStatus] = useState(null); // 'manual_done' while the confirmation shows
 
   useEffect(() => {
     let hls;
@@ -123,35 +135,47 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
       video.muted = true;
       video.play().catch(() => {});
     } else if (video && streamUrl) {
-      // If the stream never starts, or freezes for ~15s, fall back to the recording (when there is one).
+      // If the stream never starts, or freezes for too long, fall back to the recording (when
+      // there is one). Generous on purpose: segments are ~10s of video and the camera server
+      // often takes 10-15s to deliver one, so a slow-but-working stream needs >10s to start.
       let started = false;
       let lastTime = -1;
       let stalledChecks = 0;
-      const startTimer = setTimeout(() => { if (!started) setAutoReplay(true); }, 10000);
+      const startTimer = setTimeout(() => { if (!started) setAutoReplay(true); }, STREAM_START_TIMEOUT_MS);
       watchdog = setInterval(() => {
         if (!started) return;
         if (video.currentTime === lastTime) stalledChecks += 1; else { stalledChecks = 0; lastTime = video.currentTime; }
-        if (stalledChecks >= 3) setAutoReplay(true);
+        if (stalledChecks * 5000 >= STREAM_STALL_TIMEOUT_MS) setAutoReplay(true);
       }, 5000);
       video.addEventListener('playing', () => { started = true; clearTimeout(startTimer); }, { once: true });
       const stopTimers = () => { clearTimeout(startTimer); clearInterval(watchdog); };
       video.__stopReplayWatch = stopTimers;
       if (Hls.isSupported()) {
+        // Tuned for slow ~10s segments: buffer up to ~3 segments so one late segment doesn't
+        // freeze playback, and wait longer than hls.js's 10s default for a segment's first
+        // byte (the proxy tolerates up to 20s of silence). Plain HLS, so no lowLatencyMode.
         const optimizedHlsConfig = {
           enableWorker: true,
-          lowLatencyMode: true,
           backBufferLength: 30,
-          maxBufferLength: 10,
-          maxMaxBufferLength: 15,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 60,
           liveSyncDurationCount: 2,
-          liveMaxLatencyDurationCount: 5,
+          liveMaxLatencyDurationCount: 6,
+          fragLoadPolicy: {
+            default: {
+              maxTimeToFirstByteMs: 25000,
+              maxLoadTimeMs: 60000,
+              timeoutRetry: { maxNumRetry: 3, retryDelayMs: 0, maxRetryDelayMs: 0 },
+              errorRetry: { maxNumRetry: 4, retryDelayMs: 1000, maxRetryDelayMs: 8000 },
+            },
+          },
         };
 
         hls = new Hls(optimizedHlsConfig);
         hls.loadSource(proxiedStreamUrl);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          // hls.levels.length - 1 ဆိုတာ အမြင့်ဆုံး Quality (ဥပမာ 1080p) ကို ဆိုလိုပါတယ်
+          // The last level is the highest quality (e.g. 1080p)
           hls.currentLevel = hls.levels.length - 1;
           console.log(`[${cameraId}] Forced HLS to maximum resolution.`);
         });
@@ -230,12 +254,13 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
         sendNextFrame();
       };
 
-      // 🟢 1. ws.onmessage အပိုင်းကို ပြင်ပါ
+      // Messages from the detection server
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
 
           if (data.type === 'VIOLATION_ALERT') {
+            pushAlert({ cameraId, message: data.message, snapshot: data.snapshot });
             if (onViolationAlert) {
               const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
               onViolationAlert(`🔴 ${data.message} on ${data.camera} at ${timeStr}`);
@@ -257,22 +282,10 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
           }
 
           if (data.type === 'CALIBRATION_STATUS') {
-            setCalibrationStatus(data.status);
-            if (data.image_url) {
-              // Cache-bust once here, not on every render (see the <img> below —
-              // computing `?t=${Date.now()}` inline in JSX gives the <img> a new
-              // src on every unrelated re-render, restarting its fetch each time).
-              setCalibrationImageUrl(`${data.image_url}?t=${Date.now()}`);
-              setCalibImageAttempt(0);
-              setCalibImageFailed(false);
-            } else if (data.status === 'manual_done') {
-              setCalibrationImageUrl(null); // No image to show for manual
-            }
-            if (data.status === 'done' || data.status === 'failed' || data.status === 'manual_done') {
-               // Auto-hide after 5 seconds if not explicitly closed? No, let the user close it if there's an image.
-               if (data.status === 'failed' || data.status === 'manual_done') {
-                   setTimeout(() => setCalibrationStatus(null), 3000);
-               }
+            // Manual calibration saved: show a brief confirmation.
+            if (data.status === 'manual_done') {
+              setCalibrationStatus('manual_done');
+              setTimeout(() => setCalibrationStatus(null), 3000);
             }
             return;
           }
@@ -293,11 +306,11 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
             return;
           }
 
-          // Data အမျိုးအစားခွဲခြားခြင်း
+          // Box data: BBOX_DATA messages (or a bare array from older servers)
           let boxesToDraw = [];
 
           if (Array.isArray(data)) {
-            boxesToDraw = data; // အဟောင်းအတွက်
+            boxesToDraw = data;
           } else if (data.type === 'BBOX_DATA') {
             boxesToDraw = data.boxes;
           } else {
@@ -483,13 +496,13 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
   const rect = svgRef.current.getBoundingClientRect();
   const vw = video.videoWidth, vh = video.videoHeight;
 
-  // drawBoxes နဲ့ တူညီတဲ့ cover transform
+  // Same object-fit: cover transform as drawBoxes
   const scale = Math.max(rect.width / vw, rect.height / vh);
   const dw = vw * scale, dh = vh * scale;
   const dx = (rect.width - dw) / 2, dy = (rect.height - dh) / 2;
 
   const normalizedPoints = polygonPoints.map(p => ({
-    x: (p.x - dx) / dw,      // frame coordinate ပြောင်း
+    x: (p.x - dx) / dw,      // screen -> normalised frame coordinates
     y: (p.y - dy) / dh
   }));
 
@@ -656,26 +669,23 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
         )}
       </div>
 
-      {/* Admin-only box-vs-segmentation shadow toggle (see the overlayModel/websocket_test_endpoint
-          comments above). Anyone else watching this camera keeps seeing the real /ws feed
-          untouched, whether or not an admin elsewhere has this switched to "Seg". */}
+      {/* Admin-only box-vs-segmentation quick toggle (also in the camera's ⋮ menu). Bottom-right:
+          the one corner free of the camera's own timestamp/ID text (top-left), the ROI edit
+          buttons (top-right) and the LIVE badge (bottom-left). Dimmed until hovered. Other
+          viewers of this camera always keep the production /ws feed. */}
       {getAdminToken() && (
-        <div style={{ position: 'absolute', top: '12px', left: '12px', zIndex: 20, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '4px', maxWidth: 'calc(100% - 24px)' }}>
-          {/* flexWrap: the "Segmentation (experimental)" label is long enough that on a
-              narrow phone-width card this can genuinely need two lines - wrapping beats
-              the alternative (overflowing past the card, or the ROI controls row on the
-              opposite corner colliding with it when both are visible at once). */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: '6px', padding: '2px', gap: '2px' }}>
+        <div className="model-quick-toggle" style={{ position: 'absolute', bottom: '12px', right: '12px', zIndex: 20, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px', maxWidth: 'calc(100% - 24px)' }}>
+          <div style={{ display: 'flex', backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: '6px', padding: '2px', gap: '2px' }}>
             {[
-              { id: 'box', label: 'Bounding Box' },
-              { id: 'seg', label: 'Segmentation' },
+              { id: 'box', label: 'Box' },
+              { id: 'seg', label: 'Seg' },
             ].map((opt) => (
               <button
                 key={opt.id}
                 onClick={() => { setTestModelUnavailable(false); setOverlayModel(opt.id); }}
                 title={opt.id === 'seg' ? "Experimental - own isolated connection, doesn't affect the real production feed or file real violations" : 'The real production model'}
                 style={{
-                  padding: '4px 10px', borderRadius: '4px', border: 'none', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                  padding: '3px 8px', borderRadius: '4px', border: 'none', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
                   backgroundColor: overlayModel === opt.id ? (opt.id === 'seg' ? '#a855f7' : '#22c55e') : 'transparent',
                   color: overlayModel === opt.id ? '#fff' : '#d1d5db',
                 }}
@@ -764,56 +774,21 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
       <div className="live-badge" style={{ position: 'absolute', bottom: '12px', left: '12px', zIndex: 10 }}>
         <span className="dot" style={replay ? { backgroundColor: '#f59e0b', animation: 'none' } : undefined}></span>
         <span style={{ color: 'white', textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}>{replay ? 'REPLAY' : 'LIVE'}</span>
+        {/* Non-production mode must always be visible: segmentation view files no violations. */}
+        {overlayModel === 'seg' && (
+          <span
+            title="Experimental segmentation model - test view only, no violations are filed"
+            style={{ marginLeft: '4px', padding: '2px 7px', borderRadius: '4px', backgroundColor: '#a855f7', color: 'white', fontSize: '11px', letterSpacing: '0.05em' }}
+          >
+            SEG TEST
+          </span>
+        )}
       </div>
 
-      {/* Calibration Overlay */}
+      {/* Manual calibration saved - confirmation overlay */}
       {calibrationStatus && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
           <div className="bg-white rounded-xl shadow-2xl p-6 max-w-2xl w-full text-center flex flex-col items-center">
-            {calibrationStatus === 'started' && (
-              <>
-                <div className="w-12 h-12 border-4 border-amber-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-                <h3 className="text-xl font-bold text-gray-900 mb-2">Auto-Calibrating...</h3>
-                <p className="text-gray-500 text-sm">Watching traffic to map the 3D road perspective. This usually takes 10-15 seconds.</p>
-              </>
-            )}
-            {calibrationStatus === 'done' && (
-              <>
-                <div className="w-12 h-12 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-4">
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
-                </div>
-                <h3 className="text-xl font-bold text-gray-900 mb-2">Calibration Successful!</h3>
-                <p className="text-gray-500 text-sm mb-4">The speed detection engine has been hot-reloaded with the new perspective.</p>
-                {calibrationImageUrl && !calibImageFailed && (
-                  <img
-                    // calibImageAttempt in the query string forces a fresh request
-                    // (not a cached failure) on each retry below.
-                    src={`${calibrationImageUrl}&retry=${calibImageAttempt}`}
-                    alt="Calibration Grid"
-                    className="w-full rounded-lg border border-gray-200 shadow-sm mb-6"
-                    onError={() => {
-                      // The file is written before the "done" message is ever sent
-                      // (see live_server.py), so a failed load here means a
-                      // transient hiccup, not a missing file — retry a few times
-                      // with a short backoff before giving up.
-                      if (calibImageAttempt < CALIB_IMAGE_MAX_RETRIES) {
-                        setTimeout(() => setCalibImageAttempt((n) => n + 1), 500 * (calibImageAttempt + 1));
-                      } else {
-                        setCalibImageFailed(true);
-                      }
-                    }}
-                  />
-                )}
-                {calibrationImageUrl && calibImageFailed && (
-                  <div className="w-full rounded-lg border border-dashed border-gray-300 bg-gray-50 text-gray-400 text-sm py-10 mb-6">
-                    Calibration grid image could not be loaded. Calibration was still saved and applied.
-                  </div>
-                )}
-                <button onClick={() => setCalibrationStatus(null)} className="px-6 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors font-medium">
-                  Close & Resume
-                </button>
-              </>
-            )}
             {calibrationStatus === 'manual_done' && (
               <>
                 <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-4">
@@ -821,18 +796,6 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
                 </div>
                 <h3 className="text-xl font-bold text-gray-900 mb-2">Manual Calibration Saved!</h3>
                 <p className="text-gray-500 text-sm mb-4">The speed detection engine has been updated with your custom grid.</p>
-              </>
-            )}
-            {calibrationStatus === 'failed' && (
-              <>
-                <div className="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-4">
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                </div>
-                <h3 className="text-xl font-bold text-gray-900 mb-2">Calibration Failed</h3>
-                <p className="text-gray-500 text-sm mb-4">Could not find enough moving traffic to map the perspective. Please try again when there are more vehicles.</p>
-                <button onClick={() => setCalibrationStatus(null)} className="px-6 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors font-medium">
-                  Dismiss
-                </button>
               </>
             )}
           </div>

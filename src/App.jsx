@@ -1,3 +1,7 @@
+/**
+ * App shell: header (navigation, admin status, alert bell) and the four views -
+ * Live Monitoring, Violations, Analytics and Project Report.
+ */
 import { useState, useEffect, useRef, useMemo } from "react";
 import "./styles.css";
 import { CAMERAS } from "./cameras";
@@ -10,6 +14,10 @@ import FocusView from "./components/FocusView";
 import ReplayToggle from "./components/ReplayToggle";
 import AdminLoginModal from "./components/AdminLoginModal";
 import { adminLogout, useAdminSession } from "./adminAuth";
+import { NotificationBell, AlertToast } from "./components/NotificationBell";
+import { useAlerts } from "./alerts";
+import ModelMenuSection from "./components/ModelMenuSection";
+import { downloadTicket } from "./ticket";
 
 const VideoCard = ({ cam, idx, setActiveCameraIndex, setCurrentView, handleViolationAlert }) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -48,7 +56,7 @@ const VideoCard = ({ cam, idx, setActiveCameraIndex, setCurrentView, handleViola
           </button>
 
           {isMenuOpen && (
-            <div className="absolute right-0 mt-2 w-36 bg-white rounded-md shadow-lg border border-gray-200 z-50 py-1">
+            <div className="absolute right-0 mt-2 w-44 bg-white rounded-md shadow-lg border border-gray-200 z-50 py-1">
               <button
                 onClick={() => {
                   setActiveCameraIndex(idx);
@@ -65,6 +73,7 @@ const VideoCard = ({ cam, idx, setActiveCameraIndex, setCurrentView, handleViola
               >
                 Edit ROI
               </button>
+              <ModelMenuSection cameraId={cam.id} onPicked={() => setIsMenuOpen(false)} />
             </div>
           )}
         </div>
@@ -91,6 +100,19 @@ function LiveMonitoringView() {
       setLatestAlert(null);
     }, 5000);
   };
+
+  // Bell/toast "jump to camera": App switches to this tab, then asks us (via this event)
+  // to open that camera in Focus view.
+  useEffect(() => {
+    const onFocusCamera = (e) => {
+      const idx = CAMERAS.findIndex((c) => c.id === e.detail);
+      if (idx === -1) return;
+      setActiveCameraIndex(idx);
+      setCurrentView('focus');
+    };
+    window.addEventListener('focus-camera', onFocusCamera);
+    return () => window.removeEventListener('focus-camera', onFocusCamera);
+  }, []);
 
   const [cameraInfoList, setCameraInfoList] = useState([]);
 
@@ -222,6 +244,43 @@ function EvidenceSnapshot({ src, thumb = false }) {
   );
 }
 
+// Admin-only "Download Ticket" button: builds the violation's PDF ticket (see ticket.js),
+// including the same truck's sightings on other cameras (shared route_match_id).
+function TicketButton({ row, violations, compact = false }) {
+  const session = useAdminSession();
+  const [busy, setBusy] = useState(false);
+  if (!session) return null;
+
+  const handleClick = async () => {
+    setBusy(true);
+    try {
+      const related = row.route_match_id
+        ? violations.filter((v) => v.route_match_id === row.route_match_id && v.id !== row.id)
+        : [];
+      await downloadTicket(row, related, session.username || "admin");
+    } catch (err) {
+      console.error("Ticket generation failed:", err);
+      window.alert("Could not generate the ticket. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleClick}
+      disabled={busy}
+      title="Download this violation as a PDF ticket"
+      className={`inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60 transition-colors ${compact ? "px-3 py-2 text-xs" : "px-4 py-2 text-sm"}`}
+    >
+      <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16" />
+      </svg>
+      {busy ? "Preparing..." : compact ? "Ticket" : "Download Ticket"}
+    </button>
+  );
+}
+
 function EvidenceHistoryView() {
   const [violations, setViolations] = useState([]);
   const [selectedViolation, setSelectedViolation] = useState(null);
@@ -261,11 +320,8 @@ function EvidenceHistoryView() {
     return matchesId && matchesDate && matchesCamera;
   });
 
-  // Camera options come from whatever cameras actually have logged violations,
-  // so the filter never lists a camera with nothing to show or - worse - omits
-  // one that does (a hardcoded 3-camera list previously made every other
-  // camera silently return "no violations" when selected, which it can't be,
-  // since there's no way to select it).
+  // Filter options are built from the cameras that actually have violations,
+  // so every listed camera has records and none with records is missing.
   const cameraOptions = useMemo(() => {
     const set = new Set(violations.map((v) => v.camera_location).filter(Boolean));
     return ["All Cameras", ...[...set].sort()];
@@ -359,12 +415,15 @@ function EvidenceHistoryView() {
                 <td className="px-6 py-4">{row.camera_location}</td>
                 <td className="px-6 py-4">{formatSpeed(row)}</td>
                 <td className="px-6 py-4">
-                  <button 
-                    className="bg-amber-600 hover:bg-amber-700 text-white transition-colors border-none px-4 py-2 rounded-lg font-semibold text-xs" 
-                    onClick={() => setSelectedViolation(row)}
-                  >
-                    View Evidence
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button 
+                      className="bg-amber-600 hover:bg-amber-700 text-white transition-colors border-none px-4 py-2 rounded-lg font-semibold text-xs whitespace-nowrap" 
+                      onClick={() => setSelectedViolation(row)}
+                    >
+                      View Evidence
+                    </button>
+                    <TicketButton row={row} violations={violations} compact />
+                  </div>
                 </td>
               </tr>
             ))}
@@ -380,7 +439,10 @@ function EvidenceHistoryView() {
           <div style={{ backgroundColor: '#ffffff', padding: '24px', borderRadius: '12px', maxWidth: '1200px', width: '100%', maxHeight: '90vh', overflowY: 'auto', border: '1px solid #e5e7eb' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px', alignItems: 'center' }}>
               <h3 style={{ margin: 0, color: '#111827', fontSize: '20px' }}>Evidence ID: {selectedViolation.violation_id}</h3>
-              <button onClick={() => setSelectedViolation(null)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '24px' }}>✕</button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <TicketButton row={selectedViolation} violations={violations} />
+                <button onClick={() => setSelectedViolation(null)} aria-label="Close" style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '24px' }}>✕</button>
+              </div>
             </div>
             
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -446,68 +508,109 @@ function NodeStatusView() {
   );
 }
 
-// Shown in the main nav whenever an admin session is active (see adminAuth.js) - the
-// only persistent, always-visible sign of "you're signed in" and way to log out; before
-// this, "Log out" only existed inside a specific camera's ROI-editing controls, gone the
-// moment that camera wasn't in edit mode.
-function AdminStatus() {
+// Account chip for the signed-in admin (right end of the header). Log out sits inside its
+// menu rather than as an always-visible link, so it can't be hit by accident.
+function UserMenu() {
   const session = useAdminSession();
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, []);
+
   if (!session) return null;
+  const name = session.username || "admin";
   return (
-    <div className="flex items-center gap-2 pb-4 ml-auto sm:ml-0">
-      <span className="text-xs font-medium text-gray-500">
-        Signed in as <span className="text-gray-800 font-semibold">{session.username || "admin"}</span>
-      </span>
+    <div className="relative" ref={ref}>
       <button
-        onClick={() => { if (window.confirm("Log out of the admin session?")) adminLogout(); }}
-        className="text-xs font-semibold text-amber-600 hover:text-amber-700 underline underline-offset-2"
+        onClick={() => setOpen(!open)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`Account: ${name}`}
+        title={name}
+        className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-800 text-sm font-bold uppercase text-white hover:bg-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2 transition-colors"
       >
-        Log out
+        {name.charAt(0)}
       </button>
+      {open && (
+        <div role="menu" className="absolute right-0 mt-2 w-52 rounded-lg border border-gray-200 bg-white py-1 shadow-lg z-[90]">
+          <div className="px-4 py-2 border-b border-gray-100">
+            <div className="text-sm font-semibold text-gray-900">{name}</div>
+            <div className="text-xs text-gray-500">Administrator</div>
+          </div>
+          <button
+            role="menuitem"
+            onClick={() => { setOpen(false); if (window.confirm("Log out of the admin session?")) adminLogout(); }}
+            className="block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+          >
+            Log out
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
+const NAV_ITEMS = [
+  { id: "live", label: "Live Monitoring" },
+  { id: "evidence", label: "Violations" },
+  { id: "charts", label: "Analytics" },
+  { id: "report", label: "Project Report" },
+];
+
 export default function App() {
   const [currentView, setCurrentView] = useState("live");
+  const { unread } = useAlerts();
+
+  // "(3) Do Do — ..." in the browser tab while there are unread alerts.
+  useEffect(() => {
+    const base = "Do Do — Section 35 Enforcement Portal";
+    document.title = unread > 0 ? `(${unread}) ${base}` : base;
+  }, [unread]);
+
+  const jumpToCamera = (cameraId) => {
+    setCurrentView("live");
+    window.dispatchEvent(new CustomEvent("focus-camera", { detail: cameraId }));
+  };
 
   return (
     <>
       {/* One shared sign-in modal for the whole app - see adminAuth.js's requestAdminLogin
           for why this replaced a separate copy inside every LiveCCTVPlayer instance. */}
       <AdminLoginModal />
-      <header className="flex flex-wrap justify-between items-end gap-x-6 gap-y-2 px-4 sm:px-8 pt-6 bg-white shadow-sm border-b border-gray-200">
-        <div className="flex flex-col gap-1 pb-5">
-          <span className="text-amber-600 text-xs font-bold uppercase tracking-wider">By Team Unique</span>
-          <h1 className="text-gray-900 text-3xl font-extrabold tracking-tight">Do Do Vision</h1>
+      <AlertToast onSelect={jumpToCamera} />
+      {/* Header: brand | page tabs | notifications + account. On narrow screens the tabs
+          drop to their own full-width, horizontally scrollable row. */}
+      <header className="flex flex-wrap items-center justify-between gap-x-8 px-4 sm:px-8 bg-white shadow-sm border-b border-gray-200">
+        <div className="py-4">
+          <h1 className="text-gray-900 text-2xl sm:text-3xl font-extrabold tracking-tight leading-tight">Do Do Vision</h1>
+          <p className="text-gray-500 text-xs sm:text-sm font-medium">Section 35 Enforcement Portal</p>
         </div>
-        <nav className="flex flex-wrap items-end gap-x-6 gap-y-2 sm:gap-x-8 pb-3">
-          <button
-            className={`pb-4 px-1 text-[15px] font-semibold transition-colors border-b-2 ${currentView === "live" ? "text-amber-600 border-amber-600" : "text-gray-500 hover:text-gray-900 border-transparent"}`}
-            onClick={() => setCurrentView("live")}
-          >
-            Live Monitoring
-          </button>
-          <button
-            className={`pb-4 px-1 text-[15px] font-semibold transition-colors border-b-2 ${currentView === "evidence" ? "text-amber-600 border-amber-600" : "text-gray-500 hover:text-gray-900 border-transparent"}`}
-            onClick={() => setCurrentView("evidence")}
-          >
-            Evidence & History
-          </button>
-          <button
-            className={`pb-4 px-1 text-[15px] font-semibold transition-colors border-b-2 ${currentView === "charts" ? "text-amber-600 border-amber-600" : "text-gray-500 hover:text-gray-900 border-transparent"}`}
-            onClick={() => setCurrentView("charts")}
-          >
-            Report Chart
-          </button>
-          <button
-            className="px-4 py-2 mb-1 text-[15px] font-bold rounded-lg bg-amber-600 hover:bg-amber-700 text-white transition-colors border-none"
-            onClick={() => setCurrentView("report")}
-          >
-            Project Report
-          </button>
-          <AdminStatus />
+        <nav aria-label="Main" className="order-last w-full overflow-x-auto sm:order-none sm:w-auto sm:flex-1 self-stretch">
+          <ul className="flex h-full gap-x-6 sm:gap-x-8">
+            {NAV_ITEMS.map((item) => {
+              const active = currentView === item.id;
+              return (
+                <li key={item.id} className="flex">
+                  <button
+                    onClick={() => setCurrentView(item.id)}
+                    aria-current={active ? "page" : undefined}
+                    className={`whitespace-nowrap py-3 sm:py-0 px-1 text-[15px] font-semibold transition-colors border-b-2 ${active ? "text-amber-600 border-amber-600" : "text-gray-500 hover:text-gray-900 border-transparent"}`}
+                  >
+                    {item.label}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
         </nav>
+        <div className="flex items-center gap-2 sm:gap-3 py-4">
+          <NotificationBell onSelect={jumpToCamera} />
+          <UserMenu />
+        </div>
       </header>
 
       <main className="flex-1 p-8 bg-gray-50">
@@ -519,6 +622,9 @@ export default function App() {
 
         {currentView === "report" && <ProjectReport />}
       </main>
+      <footer className="px-4 sm:px-8 py-4 text-center text-xs text-gray-400 bg-gray-50 border-t border-gray-200">
+        Do Do Vision · by Team Unique
+      </footer>
     </>
   );
 }

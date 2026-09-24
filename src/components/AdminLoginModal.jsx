@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import { adminLogin, useAdminLoginRequest, clearAdminLoginRequest } from '../adminAuth';
 
-// Rendered exactly ONCE, at the App level (see App.jsx) - not per camera card. Any component
-// anywhere calls requestAdminLogin(onSuccess, contextLabel) from adminAuth.js to open this;
-// see that file's comment for why this used to be duplicated per LiveCCTVPlayer instance.
+// The admin sign-in modal. Rendered once at the App level; components open it with
+// requestAdminLogin(onSuccess, contextLabel) from adminAuth.js.
 export default function AdminLoginModal() {
   const request = useAdminLoginRequest();
   const [username, setUsername] = useState('admin');

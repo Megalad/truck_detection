@@ -13,11 +13,10 @@ const STEP1_IMAGE_KEY = 'projectReportStep1Image';
 // stays true to that real value instead of a second, easy-to-forget hardcoded copy of it.
 const LIVE_FRAME_WIDTH = 640;
 
-// TV03CL2's real entry from calibration.json - not illustrative numbers. These are the exact
-// 4 image_points/world_points_m pairs speed_estimator.py's cv2.findHomography() uses for this
-// camera (see that file's SpeedEstimator.__init__). TV03CL2_vp.jpg is the real auto-calibration
-// snapshot saved for it: lane lines detected and extrapolated to their vanishing point, used to
-// sanity-check the 4 picked points before saving them.
+// TV03CL2's real entry from calibration.json: the 4 manually picked image_points /
+// world_points_m pairs speed_estimator.py passes to cv2.findHomography() for this camera
+// (lane width 3.5 m x dashed-line spacing 27 m). Shown over a frame from the same camera
+// (public/report/calibration_TV03CL2.jpg, 1280x720 like the calibration).
 const CALIBRATION_TV03CL2 = {
   imageWidth: 1280,
   imageHeight: 720,
@@ -156,7 +155,8 @@ export default function FrameOptimizationReport() {
   // (Plan B, models/model_seg_v1.pt) - lets step 3 be re-run with either one on the same
   // uploaded photo, so the two can actually be compared side by side instead of just described.
   const [demoModel, setDemoModel] = useState('box');
-  const [maskGroundPoint, setMaskGroundPoint] = useState(null); // seg model's real lowest-body pixel, normalized
+  const [maskGroundPoint, setMaskGroundPoint] = useState(null); // seg: midpoint of the two wheel points (speed track point), normalized
+  const [maskWheelPoints, setMaskWheelPoints] = useState(null); // seg: [left, right] wheel-contact points (ROI test), normalized
   const [lastRunModel, setLastRunModel] = useState(null); // which model actually produced step3Image ("box" | "seg")
 
   // Step 5's interactive ROI - draw-to-test, the same click-to-add-points interaction as the
@@ -196,17 +196,16 @@ export default function FrameOptimizationReport() {
     }
     return inside;
   };
-  // The truck's one real tracked ground point, as a percentage {x, y} (0-100, y from top) -
-  // the same box-vs-mask choice step 4's Track Point uses, computed once here so step 5's
-  // ROI check tests against that exact real point too.
-  const usingMaskPointForRoi = lastRunModel === 'seg' && !!maskGroundPoint;
-  const truckPercent = usingMaskPointForRoi
-    ? { x: maskGroundPoint.x * 100, y: maskGroundPoint.y * 100 }
+  // The truck's ROI test point(s) as percentages {x, y} (0-100, y from top) - the same rule
+  // as the live system: box model = the box's bottom-right corner; segmentation model = the
+  // mask's two wheel-contact points, where either one inside the ROI counts.
+  const truckRoiPoints = lastRunModel === 'seg' && maskWheelPoints
+    ? maskWheelPoints.map((p) => ({ x: p.x * 100, y: p.y * 100 }))
     : step3Bbox
-    ? { x: (step3Bbox.x1 + step3Bbox.x2) / 2 * 100, y: step3Bbox.y2 * 100 }
+    ? [{ x: step3Bbox.x2 * 100, y: step3Bbox.y2 * 100 }]
     : null;
-  const truckInsideDrawnRoi = roiFinished && roiPoints.length >= 3 && truckPercent
-    ? pointInPolygon(truckPercent.x, truckPercent.y, roiPoints)
+  const truckInsideDrawnRoi = roiFinished && roiPoints.length >= 3 && truckRoiPoints
+    ? truckRoiPoints.some((p) => pointInPolygon(p.x, p.y, roiPoints))
     : null; // null = can't tell yet (no ROI drawn, or no detection run)
 
   // Reduces a /api/detect_demo response to one normalized {x, y} ground point, matching
@@ -237,6 +236,7 @@ export default function FrameOptimizationReport() {
         if (data?.result_image) setStep3Image(data.result_image);
         setStep3Bbox(data?.bbox || null);
         setMaskGroundPoint(data?.mask_ground_point || null);
+        setMaskWheelPoints(data?.mask_wheel_points || null);
         setLastRunModel(data?.model_used || demoModel);
         setFingerprint(data?.fingerprint || null);
 
@@ -337,6 +337,7 @@ export default function FrameOptimizationReport() {
     setStep3Image(null);
     setStep3Bbox(null);
     setMaskGroundPoint(null);
+    setMaskWheelPoints(null);
     setLastRunModel(null);
     setStep1Video(null);
     setStep1Image2(null);
@@ -403,7 +404,7 @@ export default function FrameOptimizationReport() {
         {
           n: 5,
           title: 'Check the restricted lane',
-          body: "Is the truck's real position inside the marked restricted lane (the red region)? The system checks every frame, but only confirms a violation once the truck has stayed inside for about 1.5 real seconds - not one flickery frame.",
+          body: "Is the truck inside the marked restricted lane (the red region)? With the bounding-box model, the system tests the box's bottom-right corner - where the right-side wheels meet the road. With the segmentation model, it tests both wheel-contact points from the truck's real outline, and either one inside counts. The check runs every frame, and each truck is reported once.",
           img: 'pipeline_05_roi.jpg',
         },
         {
@@ -421,7 +422,7 @@ export default function FrameOptimizationReport() {
         {
           n: 8,
           title: 'Alert sent & saved',
-          body: 'The photo, camera name, and speed are sent to Telegram within seconds, and the same violation - fingerprint and route match included - is written to the database, where it shows up in the Evidence & History page for review.',
+          body: 'The photo, camera name, and speed are sent to Telegram within seconds, and the same violation - fingerprint and route match included - is written to the database, where it shows up in the Violations page for review.',
           img: 'alert.png',
         },
       ].map((step, i, arr) => {
@@ -456,16 +457,15 @@ export default function FrameOptimizationReport() {
                     <div style={{ fontSize: '12px', fontWeight: 700, color: '#3b82f6', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Detected Result (YOLO - {lastRunModel === 'seg' ? 'Segmentation' : 'Bounding Box'})</div>
                     <div style={{ position: 'relative' }}>
                       <img key={step3Image} src={step3Image} style={{ width: '100%', height: 'auto', borderRadius: '8px', border: '2px solid #3b82f6', boxShadow: '0 4px 12px rgba(59, 130, 246, 0.15)', display: 'block', ...FADE_IN }} alt="Result" />
-                      {/* The whole point of the seg-vs-box comparison: the box's guessed bottom-center
-                          "wheel point" (red) vs the segmentation model's real lowest-body pixel (green) -
-                          on a diagonal or wide truck these can land in genuinely different places, which
-                          is exactly what would decide "in ROI or not" differently. */}
+                      {/* ROI test points, as the live system uses them: the box's bottom-right corner
+                          (red) vs the segmentation mask's two wheel-contact points (green). On an angled
+                          or wide truck these land in different places and can decide "in ROI" differently. */}
                       {step3Bbox && (
-                        <div title="Bounding-box wheel point (what the live system uses today)" style={{ position: 'absolute', left: `${(step3Bbox.x1 + step3Bbox.x2) / 2 * 100}%`, top: `${step3Bbox.y2 * 100}%`, width: '12px', height: '12px', marginLeft: '-6px', marginTop: '-6px', borderRadius: '50%', backgroundColor: '#ef4444', border: '2px solid white', boxShadow: '0 0 8px #ef4444' }} />
+                        <div title="Bounding box ROI point (bottom-right corner)" style={{ position: 'absolute', left: `${step3Bbox.x2 * 100}%`, top: `${step3Bbox.y2 * 100}%`, width: '12px', height: '12px', marginLeft: '-6px', marginTop: '-6px', borderRadius: '50%', backgroundColor: '#ef4444', border: '2px solid white', boxShadow: '0 0 8px #ef4444' }} />
                       )}
-                      {maskGroundPoint && (
-                        <div title="Segmentation mask's real lowest body pixel" style={{ position: 'absolute', left: `${maskGroundPoint.x * 100}%`, top: `${maskGroundPoint.y * 100}%`, width: '12px', height: '12px', marginLeft: '-6px', marginTop: '-6px', borderRadius: '50%', backgroundColor: '#22c55e', border: '2px solid white', boxShadow: '0 0 8px #22c55e' }} />
-                      )}
+                      {maskWheelPoints && maskWheelPoints.map((p, i) => (
+                        <div key={i} title={`Segmentation mask ${i === 0 ? 'left' : 'right'} wheel point`} style={{ position: 'absolute', left: `${p.x * 100}%`, top: `${p.y * 100}%`, width: '12px', height: '12px', marginLeft: '-6px', marginTop: '-6px', borderRadius: '50%', backgroundColor: '#22c55e', border: '2px solid white', boxShadow: '0 0 8px #22c55e' }} />
+                      ))}
                       {/* Re-running (Run again / switching models) leaves the PREVIOUS result visible
                           underneath - without this, it's easy to mistake a stale image for the new
                           answer while the request is still in flight. */}
@@ -478,8 +478,8 @@ export default function FrameOptimizationReport() {
                     </div>
                     {lastRunModel === 'seg' && (
                       <div style={{ display: 'flex', gap: '14px', marginTop: '8px', fontSize: '11px', color: '#475569' }}>
-                        {step3Bbox && <span><span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#ef4444', marginRight: '4px' }}></span>Box wheel point</span>}
-                        {maskGroundPoint && <span><span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#22c55e', marginRight: '4px' }}></span>Real mask ground point</span>}
+                        {step3Bbox && <span><span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#ef4444', marginRight: '4px' }}></span>Box ROI point (bottom-right)</span>}
+                        {maskWheelPoints && <span><span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#22c55e', marginRight: '4px' }}></span>Mask wheel points (either counts)</span>}
                       </div>
                     )}
                   </div>
@@ -598,14 +598,14 @@ export default function FrameOptimizationReport() {
                           {roiPoints.map((p, i) => (
                             <circle key={i} cx={p.x} cy={p.y} r="1.2" fill="#ef4444" stroke="white" strokeWidth="0.3" vectorEffect="non-scaling-stroke" />
                           ))}
-                          {truckPercent && (
-                            <circle cx={truckPercent.x} cy={truckPercent.y} r="1.4" fill="#3b82f6" stroke="white" strokeWidth="0.3" vectorEffect="non-scaling-stroke" />
-                          )}
+                          {truckRoiPoints && truckRoiPoints.map((p, i) => (
+                            <circle key={`t-${i}`} cx={p.x} cy={p.y} r="1.4" fill="#3b82f6" stroke="white" strokeWidth="0.3" vectorEffect="non-scaling-stroke" />
+                          ))}
                         </svg>
                       )}
                       {step.n === 5 && roiFinished && (
                         <div style={{ position: 'absolute', bottom: '8%', left: '5%', color: truckInsideDrawnRoi ? '#ef4444' : '#22c55e', fontWeight: '900', fontSize: 'clamp(14px, 4vw, 24px)', textShadow: '2px 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000', textTransform: 'uppercase', pointerEvents: 'none' }}>
-                          {truckPercent
+                          {truckRoiPoints
                             ? (truckInsideDrawnRoi ? 'INSIDE restricted lane' : 'Outside the restricted lane')
                             : 'Run detection in step 3 to test a real truck'}
                         </div>
@@ -622,11 +622,8 @@ export default function FrameOptimizationReport() {
                 // this panel keeps telling the same "one real truck" story step 3 already proved.
                 // Falls back to a plausible fixed spot only if step 3's detection hasn't run yet.
                 const trackImg = step3Image || step2Image || '/report/pipeline_04_speed.jpg';
-                // If segmentation was the model actually run, use its real mask-derived ground
-                // point here too - not the box's center-bottom. Step 3 already shows both (red
-                // box dot vs green mask dot) as a comparison; step 4 previously kept using the
-                // box point regardless of which model ran, which is exactly backwards for a
-                // step whose whole subject is "the truck's real ground-contact point".
+                // When segmentation was the model run, use its mask-derived ground point
+                // (midpoint of its two wheel points) rather than the box's bottom-centre.
                 const usingMaskPoint = lastRunModel === 'seg' && !!maskGroundPoint;
                 const leftPct = usingMaskPoint ? maskGroundPoint.x * 100
                   : step3Bbox ? (step3Bbox.x1 + step3Bbox.x2) / 2 * 100 : 45;
@@ -711,16 +708,14 @@ export default function FrameOptimizationReport() {
                       {revealed >= 2 && (
                       <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', display: 'flex', flexDirection: 'column', animation: 'dodo-fadein 0.4s ease' }}>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', marginBottom: '12px' }}>
-                          {/* Real calibration snapshot for TV03CL2 (public/calibration_results/TV03CL2_vp.jpg) -
-                              the actual auto-detected lane lines (green) extrapolated to their vanishing point
-                              (orange/red), used to sanity-check the 4 picked points. The 4 yellow dots are
-                              CALIBRATION_TV03CL2.points plotted at their real pixel positions - not decoration. */}
+                          {/* TV03CL2 frame with its 4 manual calibration points (yellow) at their real
+                              pixel positions from CALIBRATION_TV03CL2. */}
                           <div style={{ position: 'relative', width: '100%', aspectRatio: '16/9', backgroundColor: '#f8fafc', borderRadius: '4px', overflow: 'hidden' }}>
-                            <img src="/calibration_results/TV03CL2_vp.jpg" style={{ width: '100%', height: '100%', objectFit: 'cover', ...FADE_IN }} alt="TV03CL2 real calibration snapshot" />
+                            <img src="/report/calibration_TV03CL2.jpg" style={{ width: '100%', height: '100%', objectFit: 'cover', ...FADE_IN }} alt="TV03CL2 camera frame with its four manual calibration points" />
                             {CALIBRATION_TV03CL2.points.map((p, i) => (
                               <div key={i} style={{ position: 'absolute', left: `${p.px / CALIBRATION_TV03CL2.imageWidth * 100}%`, top: `${p.py / CALIBRATION_TV03CL2.imageHeight * 100}%`, width: '10px', height: '10px', marginLeft: '-5px', marginTop: '-5px', borderRadius: '50%', backgroundColor: '#facc15', border: '2px solid white', boxShadow: '0 0 6px rgba(0,0,0,0.6)' }}></div>
                             ))}
-                            <div style={{ position: 'absolute', bottom: '4px', left: '6px', fontSize: '9px', color: 'white', backgroundColor: 'rgba(0,0,0,0.6)', padding: '2px 6px', borderRadius: '4px' }}>Real snapshot - TV03CL2's own calibration</div>
+                            <div style={{ position: 'absolute', bottom: '4px', left: '6px', fontSize: '9px', color: 'white', backgroundColor: 'rgba(0,0,0,0.6)', padding: '2px 6px', borderRadius: '4px' }}>TV03CL2 - manual calibration points</div>
                           </div>
                           {/* Ground-plane rectangle, labeled with the real 3.5 m x 27 m dimensions above -
                               deliberately not drawn to that 1:7.7 scale (it would be a sliver), so this is a
@@ -771,7 +766,7 @@ export default function FrameOptimizationReport() {
                             </tbody>
                           </table>
                           <ul style={{ margin: '10px 0 0 0', paddingLeft: '20px', fontSize: '12px', color: '#475569', lineHeight: '1.6' }}>
-                            <li><strong>Calibration:</strong> Uses lane width (3.5m) and dashed-line spacing (27m).</li>
+                            <li><strong>Manual calibration:</strong> an admin picks 4 road points of known size - lane width (3.5 m) and dashed-line spacing (27 m).</li>
                             <li><strong>Matrix Generation:</strong> <code style={{ backgroundColor: '#e2e8f0', padding: '1px 4px', borderRadius: '3px' }}>cv2.findHomography()</code> builds a 3×3 matrix from the 4 points.</li>
                             <li><strong>Real-world Mapping:</strong> <code style={{ backgroundColor: '#e2e8f0', padding: '1px 4px', borderRadius: '3px' }}>cv2.perspectiveTransform()</code> converts pixel tracking into exact meters.</li>
                           </ul>
@@ -885,7 +880,11 @@ export default function FrameOptimizationReport() {
                   ) : (
                     <>
                       <span style={{ fontSize: '12px', color: '#64748b' }}>
-                        {truckPercent ? 'Testing your drawn shape against the truck\'s real tracked point.' : 'Run detection in step 3 first to test a real truck against this shape.'}
+                        {truckRoiPoints
+                          ? (truckRoiPoints.length > 1
+                            ? 'Testing your drawn shape against the truck\'s two wheel points - either one inside counts.'
+                            : 'Testing your drawn shape against the truck\'s bottom-right (right-side wheel) point.')
+                          : 'Run detection in step 3 first to test a real truck against this shape.'}
                       </span>
                       <button onClick={() => { handleRoiClear(); setIsDrawingRoi(true); }} style={{ cursor: 'pointer', fontSize: '13px', color: '#64748b', background: 'none', border: 'none', padding: '6px 4px', textDecoration: 'underline' }}>Redraw</button>
                     </>

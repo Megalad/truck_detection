@@ -10,7 +10,7 @@ import {
   VIOLATIONS_VOLUME_COLOR,
 } from './ReportCharts';
 
-// Per-camera version of the Report Chart tab's charts, scoped to this one
+// Per-camera version of the Analytics tab's charts, scoped to this one
 // camera_location so it's meaningful sitting directly under that camera's
 // video instead of the aggregate-across-all-cameras view.
 export default function CameraCharts({ cameraId }) {

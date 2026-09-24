@@ -14,6 +14,7 @@
   "dependencies": {
     "express": "^4.21.2",
     "hls.js": "^1.6.16",
+    "jspdf": "^3.0.4",
     "multer": "^2.2.0",
     "mysql2": "^3.22.5",
     "react": "^18.3.1",

@@ -73,14 +73,9 @@ export function adminLogout() {
   }
 }
 
-// One shared login MODAL for every camera card, not one copy per card. Previously each
-// LiveCCTVPlayer owned its own showAdminLogin/username/password state and rendered its own
-// modal, so in the grid view, clicking "Edit ROI" on two cameras opened two separate sign-in
-// popups even though there's only ever one admin session underneath (a login on card A
-// already updates getAdminToken() for card B too - it's the MODAL that was duplicated, not
-// the session). AdminLoginModal.jsx renders the one real modal, once, at the App level;
-// any component calls requestAdminLogin() to open it and gets its onSuccess callback run
-// once sign-in succeeds - or, if already signed in, onSuccess runs immediately, no modal.
+// Shared sign-in modal requests. AdminLoginModal.jsx renders a single modal at the App level;
+// any component calls requestAdminLogin(onSuccess, contextLabel) to open it. onSuccess runs
+// after a successful sign-in - or immediately, with no modal, if already signed in.
 let pendingRequest = null; // { onSuccess, contextLabel } | null
 const requestListeners = new Set();
 

@@ -1,0 +1,14 @@
+# ByteTrack alternative to botsort_truck.yaml, for comparison (select it with TRACKER=bytetrack,
+# see live_server.py). Same association settings as the BoT-SORT config so a comparison only
+# measures the tracker itself: ByteTrack is BoT-SORT minus appearance features (with_reid) and
+# camera-motion compensation (gmc_method - already off there, cameras are fixed). It matches
+# on box overlap (IoU) + the Kalman-predicted position only, which is cheaper per frame but
+# can swap ids when two similar trucks pass close together.
+tracker_type: bytetrack
+
+track_high_thresh: 0.35
+track_low_thresh: 0.10
+new_track_thresh: 0.45
+track_buffer: 30        # raw frame count - see botsort_truck.yaml
+match_thresh: 0.85      # max matching cost (1 - IoU); see botsort_truck.yaml for why 0.85
+fuse_score: True

@@ -1,3 +1,9 @@
+"""Vehicle re-identification across cameras.
+
+Computes a 512-d appearance fingerprint for a violating truck and matches it against
+recent violations from other cameras on the same route and direction, so one truck's
+violations along the motorway share a route_match_id.
+"""
 import cv2
 import numpy as np
 import json
@@ -5,11 +11,10 @@ import os
 from datetime import datetime, timedelta
 import mysql.connector
 
-# Vehicle re-ID model: ResNet34 trained on VeRi-776 (ONNX, 512-d embedding).
-# Source: https://huggingface.co/dgwon/resnet-34-veri776-onnx (file resnet34_veri776.onnx),
-# stored as models/reid_resnet34_veri776.onnx. Replaced an ImageNet-only ResNet18, which
-# separated look-alike trucks poorly. Fingerprints from the two models are NOT comparable,
-# so clear old `fingerprint` values (and route_match_id) when switching models.
+# Re-ID model: ResNet34 trained on VeRi-776 (ONNX, 512-d embedding), from
+# https://huggingface.co/dgwon/resnet-34-veri776-onnx, stored as
+# models/reid_resnet34_veri776.onnx. Fingerprints from different models are not
+# comparable: clear stored `fingerprint` / route_match_id values when changing models.
 import onnxruntime as ort
 
 REID_MODEL_PATH = os.path.join(
@@ -28,7 +33,7 @@ try:
 except Exception as e:
     print(f"Re-ID model unavailable ({e}); fingerprints and route matching are disabled.")
 
-# Load camera metadata
+# Camera metadata from camera.json: {camera_id: {route, direction, km, lat, lon}}
 camera_meta = {}
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 cam_json_path = os.path.join(base_dir, 'camera.json')

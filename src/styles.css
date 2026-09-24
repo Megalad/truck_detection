@@ -510,3 +510,18 @@ main {
 .status-list .value.online {
   color: var(--status-online);
 }
+
+/* Violation alerts (see src/alerts.js) */
+.alert-toast-in { animation: alert-toast-in 0.25s ease-out; }
+@keyframes alert-toast-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .alert-toast-in { animation: none; }
+}
+
+/* Admin model toggle on the video: unobtrusive until the user reaches for it. */
+.model-quick-toggle { opacity: 0.55; transition: opacity 0.15s; }
+.model-quick-toggle:hover, .model-quick-toggle:focus-within { opacity: 1; }
+@media (hover: none) { .model-quick-toggle { opacity: 1; } }
