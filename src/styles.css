@@ -525,3 +525,48 @@ main {
 .model-quick-toggle { opacity: 0.55; transition: opacity 0.15s; }
 .model-quick-toggle:hover, .model-quick-toggle:focus-within { opacity: 1; }
 @media (hover: none) { .model-quick-toggle { opacity: 1; } }
+
+/* Camera map (CameraMap.jsx) */
+.camera-map-pin {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: #d97706;
+  border: 3px solid #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s;
+}
+.camera-map-pin.is-selected { background: #b91c1c; transform: scale(1.2); }
+.camera-map-count {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #111827;
+  color: #fff;
+  font: 700 10px/17px system-ui, sans-serif;
+  text-align: center;
+  border: 2px solid #fff;
+}
+.camera-map-popup-row + .camera-map-popup-row { margin-top: 10px; padding-top: 10px; border-top: 1px solid #e5e7eb; }
+.camera-map-popup-title { font-weight: 700; color: #111827; font-size: 13px; }
+.camera-map-popup-meta { color: #6b7280; font-size: 12px; margin: 2px 0 6px; }
+.camera-map-open {
+  background: #d97706;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.camera-map-open:hover { background: #b45309; }
+.camera-map-popup-coords { margin-top: 10px; color: #9ca3af; font-size: 11px; }

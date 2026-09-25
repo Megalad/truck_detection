@@ -6,14 +6,14 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import "./styles.css";
 import { CAMERAS } from "./cameras";
 import LiveCCTVPlayer from "./components/LiveCCTVPlayer";
-import CameraNetworkMap from "./components/CameraNetworkMap";
+import CameraMap from "./components/CameraMap";
 import ProjectReport from "./components/ProjectReport";
 import ReportCharts from "./components/ReportCharts";
 import ViewToggle from "./components/ViewToggle";
 import FocusView from "./components/FocusView";
 import ReplayToggle from "./components/ReplayToggle";
 import AdminLoginModal from "./components/AdminLoginModal";
-import { adminLogout, useAdminSession } from "./adminAuth";
+import { adminLogout, getAdminToken, useAdminSession } from "./adminAuth";
 import { NotificationBell, AlertToast } from "./components/NotificationBell";
 import { useAlerts } from "./alerts";
 import ModelMenuSection from "./components/ModelMenuSection";
@@ -174,6 +174,12 @@ function LiveMonitoringView() {
             />
           ))}
         </div>
+      ) : currentView === 'map' ? (
+        <CameraMap
+          cameras={CAMERAS}
+          cameraInfoList={cameraInfoList}
+          onOpenCamera={(idx) => { setActiveCameraIndex(idx); setCurrentView('focus'); }}
+        />
       ) : (
         <FocusView
           cameras={CAMERAS}
@@ -281,6 +287,51 @@ function TicketButton({ row, violations, compact = false }) {
   );
 }
 
+// Admin-only delete: removes the violation record from the database and its evidence photo
+// (DELETE /api/violations/:id on the Python server, which checks the admin session).
+function DeleteViolationButton({ row, onDeleted, compact = false }) {
+  const session = useAdminSession();
+  const [busy, setBusy] = useState(false);
+  if (!session) return null;
+
+  const handleClick = async () => {
+    if (!window.confirm(`Permanently delete violation ${row.violation_id} and its evidence photo?\n\nThis cannot be undone.`)) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/violations/${row.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${getAdminToken()}` },
+      });
+      if (res.status === 401) {
+        adminLogout();
+        window.alert("Your admin session has expired. Please sign in again.");
+        return;
+      }
+      if (!res.ok && res.status !== 404) throw new Error(`HTTP ${res.status}`);
+      onDeleted(row.id); // 404 = already gone, so drop it from the list too
+    } catch (err) {
+      console.error("Delete failed:", err);
+      window.alert("Could not delete this violation. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleClick}
+      disabled={busy}
+      title="Delete this violation and its evidence photo"
+      className={`inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60 transition-colors ${compact ? "px-3 py-2 text-xs" : "px-4 py-2 text-sm"}`}
+    >
+      <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.87 12.14A2 2 0 0116.14 21H7.86a2 2 0 01-1.99-1.86L5 7m5 4v6m4-6v6M4 7h16M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3" />
+      </svg>
+      {busy ? "Deleting..." : "Delete"}
+    </button>
+  );
+}
+
 function EvidenceHistoryView() {
   const [violations, setViolations] = useState([]);
   const [selectedViolation, setSelectedViolation] = useState(null);
@@ -327,19 +378,15 @@ function EvidenceHistoryView() {
     return ["All Cameras", ...[...set].sort()];
   }, [violations]);
 
+  const handleDeleted = (id) => {
+    setViolations((list) => list.filter((v) => v.id !== id));
+    setSelectedViolation((sel) => (sel && sel.id === id ? null : sel));
+  };
+
   const handleClearFilters = () => {
     setSearchId("");
     setFilterDate("");
     setFilterCamera("All Cameras");
-  };
-
-  // Speed is recorded at violation time; tolerate whichever field name the API
-  // sends (or none) and never throw on a missing value.
-  const formatSpeed = (row) => {
-    const raw = row.speed_kmh ?? row.speed ?? row.violation_speed;
-    const num = Number(raw);
-    if (raw === undefined || raw === null || raw === "" || Number.isNaN(num)) return "—";
-    return `${num.toFixed(1)} km/h`;
   };
 
   return (
@@ -402,7 +449,6 @@ function EvidenceHistoryView() {
               <th className="px-6 py-4">Snapshot</th>
               <th className="px-6 py-4">Timestamp</th>
               <th className="px-6 py-4">Camera Location</th>
-              <th className="px-6 py-4">Speed</th>
               <th className="px-6 py-4">Action</th>
             </tr>
           </thead>
@@ -413,7 +459,6 @@ function EvidenceHistoryView() {
                 <td className="px-6 py-4"><EvidenceSnapshot src={row.evidence_snapshot_url} thumb /></td>
                 <td className="px-6 py-4">{new Date(row.timestamp).toLocaleString()}</td>
                 <td className="px-6 py-4">{row.camera_location}</td>
-                <td className="px-6 py-4">{formatSpeed(row)}</td>
                 <td className="px-6 py-4">
                   <div className="flex items-center gap-2">
                     <button 
@@ -423,12 +468,13 @@ function EvidenceHistoryView() {
                       View Evidence
                     </button>
                     <TicketButton row={row} violations={violations} compact />
+                    <DeleteViolationButton row={row} onDeleted={handleDeleted} compact />
                   </div>
                 </td>
               </tr>
             ))}
             {filteredViolations.length === 0 && (
-              <tr><td colSpan="6" className="text-center py-8 text-gray-500">No violations found matching filters.</td></tr>
+              <tr><td colSpan="5" className="text-center py-8 text-gray-500">No violations found matching filters.</td></tr>
             )}
           </tbody>
         </table>
@@ -441,6 +487,7 @@ function EvidenceHistoryView() {
               <h3 style={{ margin: 0, color: '#111827', fontSize: '20px' }}>Evidence ID: {selectedViolation.violation_id}</h3>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                 <TicketButton row={selectedViolation} violations={violations} />
+                <DeleteViolationButton row={selectedViolation} onDeleted={handleDeleted} />
                 <button onClick={() => setSelectedViolation(null)} aria-label="Close" style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '24px' }}>✕</button>
               </div>
             </div>
@@ -452,8 +499,7 @@ function EvidenceHistoryView() {
               </div>
               <div style={{ backgroundColor: '#f9fafb', padding: '16px', borderRadius: '8px', fontSize: '14px', color: '#374151', border: '1px solid #e5e7eb' }}>
                 <p style={{ margin: '0 0 8px 0' }}><strong>Timestamp:</strong> {new Date(selectedViolation.timestamp).toLocaleString()}</p>
-                <p style={{ margin: '0 0 8px 0' }}><strong>Location:</strong> {selectedViolation.camera_location}</p>
-                <p style={{ margin: 0 }}><strong>Speed:</strong> {formatSpeed(selectedViolation)}</p>
+                <p style={{ margin: 0 }}><strong>Location:</strong> {selectedViolation.camera_location}</p>
               </div>
             </div>
           </div>
@@ -496,14 +542,6 @@ function AnalyticsView() {
           </div>
         </div>
       </article>
-    </section>
-  );
-}
-
-function NodeStatusView() {
-  return (
-    <section style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-      <CameraNetworkMap />
     </section>
   );
 }

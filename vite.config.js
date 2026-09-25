@@ -34,6 +34,7 @@ export default defineConfig({
       // fetch('/api/admin/login') goes to Node instead, which has no such route -
       // Express's default 404 on an unmatched POST, not the Python error you'd expect.
       "/api/admin/login": "http://localhost:8000",
+      "/api/violations/": "http://localhost:8000", // DELETE one record (GET /api/violations stays on Node)
       "/api/admin/logout": "http://localhost:8000",
       "/api/process_recorded": "http://localhost:8000",
       "/api/detect_demo": "http://localhost:8000",

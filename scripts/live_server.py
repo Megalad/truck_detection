@@ -10,6 +10,7 @@ Endpoints
     POST /api/process_recorded    run the same pipeline over a recorded / uploaded video
     POST /api/detect_demo         single-image detection for the Project Report demo
     POST /api/admin/login|logout  shared admin session (required to edit a camera's ROI)
+    DELETE /api/violations/{id}   admin only: delete a violation record and its snapshot
 
 A confirmed violation writes an evidence snapshot, a MySQL row (with a Re-ID fingerprint
 for cross-camera matching) and, if configured, a Telegram alert.
@@ -35,7 +36,7 @@ import shutil
 import traceback
 import mysql.connector
 from datetime import datetime
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -244,6 +245,11 @@ print(f"Inference device: {DEVICE}")
 # Rule 2 threshold. Section 35 is a lane restriction with no speed component, so this is
 # fixed at 0 (any truck in the ROI counts) rather than operator-adjustable.
 SPEED_LIMIT_KMH = 0
+# With no debounce a violation is confirmed on the truck's first frame in the ROI, before
+# the speed filter has enough samples. The evidence photo and web alert happen at once;
+# the database record and Telegram alert wait up to this long for the speed (or until the
+# truck leaves view), then are saved with or without it.
+SPEED_WAIT_SECONDS = 3.0
 
 # ============================================================================
 # Evidence snapshots, alert de-duplication and notifications
@@ -318,7 +324,8 @@ def send_telegram_alert(camera_id, speed, snapshot_path):
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
 
         # Message caption
-        caption = f"Violation Detected!!\nCamera: {camera_id}\nSpeed: {speed:.1f} km/h\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        speed_text = "not measured" if speed is None else f"{speed:.1f} km/h"
+        caption = f"Violation Detected!!\nCamera: {camera_id}\nSpeed: {speed_text}\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         
         with open(snapshot_path, 'rb') as photo:
             files = {'photo': photo}
@@ -418,6 +425,44 @@ async def admin_logout(req: AdminLogoutRequest):
     """End an admin session (idempotent)."""
     admin_sessions.pop(req.token, None)
     return {"ok": True}
+
+
+@app.delete("/api/violations/{record_id}")
+def delete_violation(record_id: int, authorization: str = Header(default="")):
+    """Admin only: permanently delete one violation record and its evidence snapshot."""
+    token = authorization[7:] if authorization.startswith("Bearer ") else ""
+    if not _valid_admin_token(token):
+        raise HTTPException(status_code=401, detail="Admin session required")
+
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute("SELECT evidence_snapshot_url FROM violations WHERE id = %s", (record_id,))
+        row = cursor.fetchone()
+        if row is None:
+            cursor.close()
+            conn.close()
+            raise HTTPException(status_code=404, detail="Violation not found")
+        cursor.execute("DELETE FROM violations WHERE id = %s", (record_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except mysql.connector.Error as e:
+        print(f"ERROR: MySQL delete failed for record {record_id}: {e}")
+        raise HTTPException(status_code=500, detail="Database error")
+
+    # Remove the snapshot file too - only a plain file name inside evidence_snapshots,
+    # so a stored URL can never point this at any other path.
+    snapshot_url = row[0] or ""
+    file_deleted = False
+    if snapshot_url.startswith("/evidence_snapshots/"):
+        name = os.path.basename(snapshot_url)
+        path = os.path.join(base_dir, "public", "evidence_snapshots", name)
+        if name and os.path.isfile(path):
+            os.remove(path)
+            file_deleted = True
+    print(f"Deleted violation record {record_id} (snapshot removed: {file_deleted})")
+    return {"ok": True, "snapshot_deleted": file_deleted}
 
 class DetectDemoRequest(BaseModel):
     """Body of POST /api/detect_demo."""
@@ -827,6 +872,18 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
     roi_enter_time = {}    # track_id -> wall-clock time it first entered the ROI (this streak)
     prev_gray = None
     opt_points = {}
+    # Violations waiting for a speed before being recorded (see SPEED_WAIT_SECONDS):
+    # track_id -> {violation_id, snapshot_url, snap_path, roi_json, bbox, frame, deadline}
+    pending_records = {}
+
+    def record_violation(track_id, speed_kmh):
+        """Save a pending violation to the database and send the Telegram alert."""
+        p = pending_records.pop(track_id, None)
+        if p is None:
+            return
+        threading.Thread(target=send_telegram_alert, args=(camera_id, speed_kmh, p["snap_path"])).start()
+        threading.Thread(target=save_violation_to_db, args=(camera_id, p["violation_id"], p["roi_json"], p["snapshot_url"], p["bbox"], p["frame"], speed_kmh)).start()
+
     print(f"[{camera_id}] Loaded a private model instance for this connection")
 
     try:
@@ -985,6 +1042,8 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                             # Label shown on the box
                             box_label = "Tracking..." if speed_kmh is None else f"{speed_kmh:.1f} km/h"
                             is_violation = False  # sent per box so the client can highlight violators
+                            if speed_kmh is not None and track_id in pending_records:
+                                record_violation(track_id, speed_kmh)  # speed now known
 
                             if roi_poly is not None:
                                 # ROI test point: the box's bottom-RIGHT corner (right-side wheels)
@@ -1039,10 +1098,19 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                                             print(f"[{camera_id}] ERROR writing evidence snapshot:\n{traceback.format_exc()}")
                                         new_snapshot_url = f"/evidence_snapshots/{snap_filename}"
                                         
-                                        # Notify and record the violation in background threads
-                                        threading.Thread(target=send_telegram_alert, args=(camera_id, speed_kmh, snap_path)).start()
-
-                                        threading.Thread(target=save_violation_to_db, args=(camera_id, violation_id, json.dumps(camera_rois[camera_id]), new_snapshot_url, violating_bbox, clean_frame, speed_kmh)).start()
+                                        # Record + Telegram now if the speed is known, otherwise
+                                        # once it is (or after SPEED_WAIT_SECONDS / truck gone).
+                                        pending_records[track_id] = {
+                                            "violation_id": violation_id,
+                                            "snapshot_url": new_snapshot_url,
+                                            "snap_path": snap_path,
+                                            "roi_json": json.dumps(camera_rois[camera_id]),
+                                            "bbox": violating_bbox,
+                                            "frame": clean_frame,
+                                            "deadline": current_time_sec + SPEED_WAIT_SECONDS,
+                                        }
+                                        if speed_kmh is not None:
+                                            record_violation(track_id, speed_kmh)
 
                             boxes.append({
                                 "x1": float(coords[0]),
@@ -1061,6 +1129,12 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                     _live_ids = {int(t) for t in track_ids}
                     for _tid in [t for t in roi_enter_time if t not in _live_ids]:
                         del roi_enter_time[_tid]
+
+                # Pending records whose truck left view or whose wait expired: save without speed.
+                _now = time.time()
+                _live = {int(t) for t in track_ids} if result.boxes is not None else set()
+                for _tid in [t for t, p in pending_records.items() if t not in _live or _now >= p["deadline"]]:
+                    record_violation(_tid, None)
 
                 # Processing rate for this frame, plus the alert (if a violation was filed)
                 fps = 0.0
@@ -1089,7 +1163,10 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
     except Exception as e:
         print(f"[{camera_id}] Error in WebSocket loop: {e}\n{traceback.format_exc()}")
     finally:
-        # Release this connection's speed filters and alert state.
+        # Record any violation still waiting for a speed, then release this connection's
+        # speed filters and alert state.
+        for _tid in list(pending_records):
+            record_violation(_tid, None)
         speed_estimator.reset_estimator(camera_id)
         alerted_track_ids.pop(camera_id, None)
         print(f"[{camera_id}] Connection state cleaned up")
