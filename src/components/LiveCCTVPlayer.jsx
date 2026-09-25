@@ -11,11 +11,6 @@ import { adminLogout, getAdminToken, useAdminSession, requestAdminLogin } from '
  * Admins can edit the ROI and run speed calibration from here.
  */
 
-// Live-stream fallback timing (see the autoReplay effect and the start/stall checks below).
-const STREAM_START_TIMEOUT_MS = 30000; // no picture yet after this -> replay
-const STREAM_STALL_TIMEOUT_MS = 30000; // picture frozen this long -> replay
-const LIVE_RETRY_MS = 120000;          // auto-replay retries the live stream after this
-
 const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
   // Live <video> plays at full rate; a transparent canvas on top redraws
   // every animation frame (~60/sec via requestAnimationFrame), easing each
@@ -27,26 +22,17 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
   // the screen refreshes); without it the box would only move once per
   // WebSocket response.
 
-  // Replay ("Plan B"): play public/demo/<cameraId>.mp4 instead of the CCTV stream, either because
-  // the operator switched to Replay or because the stream is down (autoReplay). Only possible
-  // when that clip exists; otherwise the camera keeps trying its live stream.
+  // Replay ("Plan B"): play public/demo/<cameraId>.mp4 instead of the CCTV stream - only when
+  // the operator switches to Replay (never automatically), and only if that clip exists;
+  // otherwise the camera keeps its live stream.
   const forcedReplay = useReplayMode();
-  const [autoReplay, setAutoReplay] = useState(false);
   const [clipOk, setClipOk] = useState(null); // null = not checked yet
   useEffect(() => {
     let cancelled = false;
     demoClipExists(cameraId).then((ok) => { if (!cancelled) setClipOk(ok); });
     return () => { cancelled = true; };
   }, [cameraId]);
-  const replay = (forcedReplay || autoReplay) && clipOk === true;
-
-  // An automatic fallback is temporary: after LIVE_RETRY_MS, try the live stream again
-  // (if it's still down, the start/stall checks below just fall back again).
-  useEffect(() => {
-    if (!autoReplay || forcedReplay) return undefined;
-    const t = setTimeout(() => setAutoReplay(false), LIVE_RETRY_MS);
-    return () => clearTimeout(t);
-  }, [autoReplay, forcedReplay]);
+  const replay = forcedReplay && clipOk === true;
 
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -128,28 +114,12 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
     const proxiedStreamUrl = streamUrl ? `/cctv/${cameraId}/playlist.m3u8` : streamUrl;
 
     // 1. Initialize the video source: a local recording (replay) or the HLS stream
-    let watchdog;
     if (video && replay) {
       video.src = demoClipUrl(cameraId);
       video.loop = true;
       video.muted = true;
       video.play().catch(() => {});
     } else if (video && streamUrl) {
-      // If the stream never starts, or freezes for too long, fall back to the recording (when
-      // there is one). Generous on purpose: segments are ~10s of video and the camera server
-      // often takes 10-15s to deliver one, so a slow-but-working stream needs >10s to start.
-      let started = false;
-      let lastTime = -1;
-      let stalledChecks = 0;
-      const startTimer = setTimeout(() => { if (!started) setAutoReplay(true); }, STREAM_START_TIMEOUT_MS);
-      watchdog = setInterval(() => {
-        if (!started) return;
-        if (video.currentTime === lastTime) stalledChecks += 1; else { stalledChecks = 0; lastTime = video.currentTime; }
-        if (stalledChecks * 5000 >= STREAM_STALL_TIMEOUT_MS) setAutoReplay(true);
-      }, 5000);
-      video.addEventListener('playing', () => { started = true; clearTimeout(startTimer); }, { once: true });
-      const stopTimers = () => { clearTimeout(startTimer); clearInterval(watchdog); };
-      video.__stopReplayWatch = stopTimers;
       if (Hls.isSupported()) {
         // Tuned for slow ~10s segments: buffer up to ~3 segments so one late segment doesn't
         // freeze playback, and wait longer than hls.js's 10s default for a segment's first
@@ -353,7 +323,6 @@ const LiveCCTVPlayer = ({ streamUrl, cameraId, onViolationAlert }) => {
     // Cleanup
     return () => {
       isConnected = false;
-      if (video && video.__stopReplayWatch) { video.__stopReplayWatch(); video.__stopReplayWatch = null; }
       if (hls) hls.destroy();
       if (video && replay) { video.removeAttribute('src'); video.load(); }
       if (wsRef.current) wsRef.current.close();

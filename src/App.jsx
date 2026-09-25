@@ -307,8 +307,13 @@ function DeleteViolationButton({ row, onDeleted, compact = false }) {
         window.alert("Your admin session has expired. Please sign in again.");
         return;
       }
-      if (!res.ok && res.status !== 404) throw new Error(`HTTP ${res.status}`);
-      onDeleted(row.id); // 404 = already gone, so drop it from the list too
+      if (!res.ok) {
+        // Only the endpoint's own "not found" means the record is already gone. Any other
+        // 404 (e.g. a server without this endpoint yet) must not look like a success.
+        const body = await res.json().catch(() => null);
+        if (!(res.status === 404 && body?.detail === "Violation not found")) throw new Error(`HTTP ${res.status}`);
+      }
+      onDeleted(row.id);
     } catch (err) {
       console.error("Delete failed:", err);
       window.alert("Could not delete this violation. Please try again.");

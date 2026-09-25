@@ -81,7 +81,14 @@ export default function CameraMap({ cameras, cameraInfoList, onOpenCamera }) {
     }).addTo(map);
     map.setView([13.75, 100.7], 10);
     mapRef.current = map;
-    return () => { map.remove(); mapRef.current = null; };
+
+    // Leaflet measures its box once, at creation. The box can still be resizing then (layout,
+    // Tailwind CDN styles arriving, window resize), which leaves grey untiled areas and
+    // misplaced markers - so re-measure whenever the box's size changes.
+    const resizeObserver = new ResizeObserver(() => map.invalidateSize());
+    resizeObserver.observe(mapEl.current);
+
+    return () => { resizeObserver.disconnect(); map.remove(); mapRef.current = null; };
   }, []);
 
   // (Re)draw markers when the camera data arrives.
@@ -146,7 +153,7 @@ export default function CameraMap({ cameras, cameraInfoList, onOpenCamera }) {
   return (
     <div className="flex flex-col md:flex-row gap-4">
       {/* Search + camera list */}
-      <aside className="md:w-72 shrink-0 bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col md:h-[70vh]">
+      <aside className="md:w-72 shrink-0 bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col md:max-h-[70vh]">
         <div className="p-3 border-b border-gray-200">
           <label htmlFor="camera-search" className="sr-only">Search cameras</label>
           <input
@@ -185,7 +192,11 @@ export default function CameraMap({ cameras, cameraInfoList, onOpenCamera }) {
       </aside>
 
       {/* Map */}
-      <div ref={mapEl} className="h-[60vh] md:h-[70vh] flex-1 rounded-xl border border-gray-200 shadow-sm z-0" />
+      <div
+        ref={mapEl}
+        style={{ height: '70vh', minHeight: 360 }}
+        className="flex-1 rounded-xl border border-gray-200 shadow-sm z-0"
+      />
     </div>
   );
 }

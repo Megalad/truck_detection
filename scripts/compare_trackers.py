@@ -34,7 +34,7 @@ TRACKERS = {
 DEFAULT_CLIPS = ["TV03CL2", "TV27CL1", "TV13CL1", "TV35CL2"]
 FRAME_WIDTH = 640      # live_server.LIVE_FRAME_WIDTH
 LIVE_FPS = 10.0        # live_server.LIVE_FPS_ESTIMATE
-CONF = 0.4             # live_server.DETECTION_CONF
+CONF = 0.55            # live_server.DETECTION_CONF
 TRUCK_CLASSES = {"truck", "heavy_truck"}
 RESPAWN_SECONDS = 1.5
 

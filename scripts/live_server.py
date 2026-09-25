@@ -231,14 +231,14 @@ LIVE_FPS_ESTIMATE = 10.0
 # however slowly a loaded server receives frames. Recorded playback uses a frame count,
 # since it processes every frame of the file.
 ROI_DEBOUNCE_SECONDS = ROI_DEBOUNCE_FRAMES / LIVE_FPS_ESTIMATE
-# Detection confidence for the production model (live + recorded). Validated on live
-# frames from 5 cameras: detections between 0.35 and 0.5 were all genuine (distant or
-# partly occluded) trucks.
-DETECTION_CONF = 0.4
-# Higher bar for the experimental segmentation model: at 0.4 it produced duplicate boxes
+# Detection confidence for the production model (live + recorded). Higher values favour
+# fewer false boxes; lower (e.g. 0.4) keeps more distant / partly occluded trucks (on live
+# frames from 5 cameras, detections between 0.35 and 0.5 were genuine trucks).
+DETECTION_CONF = 0.55
+# Confidence for the experimental segmentation model. At 0.4 it produced duplicate boxes
 # and glare false positives on night footage (456 -> 110 detections over 400 frames at 0.6,
 # with no real trucks lost on visual spot-check).
-SEG_DETECTION_CONF = 0.6
+SEG_DETECTION_CONF = 0.55
 # cuda:0 on NVIDIA, mps on Apple silicon, else cpu; override with YOLO_DEVICE.
 DEVICE = pick_device()
 print(f"Inference device: {DEVICE}")
