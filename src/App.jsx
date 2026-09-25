@@ -13,7 +13,7 @@ import ViewToggle from "./components/ViewToggle";
 import FocusView from "./components/FocusView";
 import ReplayToggle from "./components/ReplayToggle";
 import AdminLoginModal from "./components/AdminLoginModal";
-import { adminLogout, getAdminToken, useAdminSession } from "./adminAuth";
+import { adminLogout, getAdminToken, requestAdminLogin, useAdminSession } from "./adminAuth";
 import { NotificationBell, AlertToast } from "./components/NotificationBell";
 import { useAlerts } from "./alerts";
 import ModelMenuSection from "./components/ModelMenuSection";
@@ -551,8 +551,9 @@ function AnalyticsView() {
   );
 }
 
-// Account chip for the signed-in admin (right end of the header). Log out sits inside its
-// menu rather than as an always-visible link, so it can't be hit by accident.
+// Right end of the header: a "Sign in" button when signed out, or the signed-in admin's
+// avatar menu. Log out sits inside the menu rather than as an always-visible link, so it
+// can't be hit by accident.
 function UserMenu() {
   const session = useAdminSession();
   const [open, setOpen] = useState(false);
@@ -564,7 +565,16 @@ function UserMenu() {
     return () => document.removeEventListener("mousedown", close);
   }, []);
 
-  if (!session) return null;
+  if (!session) {
+    return (
+      <button
+        onClick={() => requestAdminLogin(() => {})}
+        className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
+      >
+        Sign in
+      </button>
+    );
+  }
   const name = session.username || "admin";
   return (
     <div className="relative" ref={ref}>

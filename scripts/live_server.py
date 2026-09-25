@@ -299,23 +299,29 @@ def write_evidence_snapshot(clean_frame, bbox, snap_path):
                                                    scale=evidence_frame.shape[1] / 640)
     cv2.imwrite(snap_path, evidence_frame, [cv2.IMWRITE_JPEG_QUALITY, SNAPSHOT_JPEG_QUALITY])
 
-DUP_ALERT_WINDOW_SECONDS = 5.0   # a box overlapping one alerted within this window is the same truck
+DUP_ALERT_WINDOW_SECONDS = 5.0   # a box overlapping one alerted within this window may be the same truck
 DUP_ALERT_OVERLAP = 0.5          # intersection / smaller box area
-_recent_alert_boxes = collections.defaultdict(list)   # camera_id -> [(time, bbox)]
+_recent_alert_boxes = collections.defaultdict(list)   # camera_id -> [(time, bbox, track_id)]
 
-def _claim_alert(camera_id, bbox, now):
-    """True if a violation alert may be raised for `bbox`; records it. False if
-    an alert for an overlapping box was raised on this camera a moment ago."""
-    recent = [(t, b) for t, b in _recent_alert_boxes[camera_id] if now - t <= DUP_ALERT_WINDOW_SECONDS]
+def _claim_alert(camera_id, bbox, now, track_id=None, live_track_ids=None):
+    """True if a violation alert may be raised for `bbox`; records it. False if it looks like
+    a re-detection of a truck alerted on this camera a moment ago (the tracker gave the same
+    truck a new id): an overlapping box, alerted within DUP_ALERT_WINDOW_SECONDS, whose
+    original track is no longer visible. If that earlier truck is still being tracked in
+    this frame, the new box is a different truck (e.g. the next one in a queue entering the
+    ROI at the same spot) and is allowed."""
+    recent = [r for r in _recent_alert_boxes[camera_id] if now - r[0] <= DUP_ALERT_WINDOW_SECONDS]
     _recent_alert_boxes[camera_id] = recent
     x1, y1, x2, y2 = bbox
     area = max(1, (x2 - x1) * (y2 - y1))
-    for _, (a1, b1, a2, b2) in recent:
+    for _, (a1, b1, a2, b2), prev_tid in recent:
+        if live_track_ids is not None and prev_tid is not None and prev_tid != track_id and prev_tid in live_track_ids:
+            continue  # the earlier truck is still visible elsewhere: not a duplicate
         iw = min(x2, a2) - max(x1, a1)
         ih = min(y2, b2) - max(y1, b1)
         if iw > 0 and ih > 0 and iw * ih / min(area, max(1, (a2 - a1) * (b2 - b1))) >= DUP_ALERT_OVERLAP:
             return False
-    recent.append((now, bbox))
+    recent.append((now, bbox, track_id))
     return True
 
 def send_telegram_alert(camera_id, speed, snapshot_path):
@@ -698,11 +704,11 @@ def _process_video(input_path, output_path, camera_id, roi_points, evidence_dir=
         boxes = []
         draw_items = []   # boxes to draw, after all detection logic (so the evidence frame stays clean)
         violating_bbox = None
-        new_snapshot_url = ""
         clean_frame = None  # copy of `frame` taken before any annotation is drawn on it
         if result.boxes is not None:
                     # Track ids for this frame (empty until the tracker assigns them)
                     track_ids = result.boxes.id.cpu().numpy() if result.boxes.id is not None else []
+                    frame_track_ids = {int(t) for t in track_ids}
                     
                     for i in range(len(result.boxes.cls)):
                         cls_id = int(result.boxes.cls[i].cpu().numpy())
@@ -780,7 +786,7 @@ def _process_video(input_path, output_path, camera_id, roi_points, evidence_dir=
                                     _first_sight = track_id not in alerted_track_ids[alert_key]
                                     if _first_sight:
                                         alerted_track_ids[alert_key].add(track_id)
-                                    if _first_sight and not new_snapshot_url and _claim_alert(alert_key, violating_bbox, video_time_sec):
+                                    if _first_sight and _claim_alert(alert_key, violating_bbox, video_time_sec, track_id, frame_track_ids):
                                         current_time_chk = time.time()
                                         violation_id = f"V-{int(current_time_chk)}-{track_id}"
                                         snapshot_dir = evidence_dir or os.path.join(base_dir, "public", "evidence_snapshots")
@@ -978,7 +984,7 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                 
                 boxes = []
                 violating_bbox = None
-                new_snapshot_url = ""
+                new_alert_urls = []  # evidence URL of every violation filed in this frame
                 clean_frame = None  # copy of `frame` taken before any annotation is drawn on it
 
                 # This camera's ROI polygon in frame pixels (None if not set)
@@ -992,6 +998,7 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                 if result.boxes is not None:
                     # Track ids for this frame (empty until the tracker assigns them)
                     track_ids = result.boxes.id.cpu().numpy() if result.boxes.id is not None else []
+                    frame_track_ids = {int(t) for t in track_ids}
                     # Defined before the loop so cleanup() below has it even with no trucks.
                     current_time_sec = time.time()
 
@@ -1083,7 +1090,7 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                                     # De-duplication: one alert per track id, and none for a box
                                     # overlapping one alerted moments ago (the tracker can give one
                                     # truck two ids, e.g. cab/trailer boxes or an id switch).
-                                    if _first_sight and not new_snapshot_url and _claim_alert(camera_id, (x1_pix, y1_pix, x2_pix, y2_pix), time.time()):
+                                    if _first_sight and _claim_alert(camera_id, (x1_pix, y1_pix, x2_pix, y2_pix), time.time(), track_id, frame_track_ids):
                                         current_time_chk = time.time()
                                         violation_id = f"V-{int(current_time_chk)}-{track_id}"
                                         
@@ -1097,6 +1104,7 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                                         except Exception:
                                             print(f"[{camera_id}] ERROR writing evidence snapshot:\n{traceback.format_exc()}")
                                         new_snapshot_url = f"/evidence_snapshots/{snap_filename}"
+                                        new_alert_urls.append(new_snapshot_url)
                                         
                                         # Record + Telegram now if the speed is known, otherwise
                                         # once it is (or after SPEED_WAIT_SECONDS / truck gone).
@@ -1141,14 +1149,13 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
                 time_diff = time.time() - start_time
                 if time_diff > 0:
                     fps = 1.0 / time_diff
-                if new_snapshot_url:
-                    alert_msg = {
+                for alert_url in new_alert_urls:  # one alert per violation filed this frame
+                    await websocket.send_json({
                         "type": "VIOLATION_ALERT",
                         "camera": camera_id,
                         "message": "Potential Section 35 Violation detected!",
-                        "snapshot": new_snapshot_url,  # evidence image, shown in the web page's alert bell
-                    }
-                    await websocket.send_json(alert_msg)
+                        "snapshot": alert_url,  # evidence image, shown in the web page's alert bell
+                    })
                 
                 # Boxes for the client overlay
                 payload = {
